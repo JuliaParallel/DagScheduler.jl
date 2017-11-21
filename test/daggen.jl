@@ -29,7 +29,7 @@ function pushthunk(t, a = Any[])
    a
 end
 
-function gendeepdag(T)
+function gen_cross_dag()
     x = gendag(T)
     for idx in 1:5
         x = gendag(T)
@@ -37,7 +37,25 @@ function gendeepdag(T)
     x
 end
 
-#const deepdag = gendeepdag(T)
+function gen_straight_dag(inp)
+    nextinp = []
+    if length(inp) == 6
+        push!(nextinp, delayed(f)(inp[1]))
+        push!(nextinp, delayed(g)(inp[2], inp[3]))
+        push!(nextinp, delayed(h)(inp[4], inp[5], inp[6]))
+        return delayed(h)(nextinp...)
+    else
+        for idx in 1:6:length(inp)
+            f1 = delayed(f)(inp[idx])
+            f2 = delayed(g)(inp[idx+1], inp[idx+2])
+            f3 = delayed(h)(inp[idx+3], inp[idx+4], inp[idx+5])
+            push!(nextinp, delayed(h)(f1, f2, f3))
+        end
+        return gen_straight_dag(nextinp)
+    end
+end
+
+#const deepdag = gen_straight_dag(T)
 #const ordereddag = pushthunk(deepdag)
 
 import Dagger: dsort_chunks

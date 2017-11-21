@@ -136,7 +136,7 @@ function rundag(dag; nexecutors::Int=nworkers(), slowdown::Bool=false, debug::Bo
         for idx in 1:length(executors)
             executorpath = executors[idx]
             info("spawning executor $executorpath")
-            executor_task = @spawnat (idx+1) runexecutor(brokerpath, executorpath, dag; slowdown=slowdown, debug=debug, metastore=metastore, help_threshold=(length(executors)-1))
+            executor_task = @spawnat (idx+1) runexecutor(brokerpath, executorpath, dag; slowdown=slowdown, debug=debug, metastore=metastore, help_threshold=1)
             push!(executor_tasks, executor_task)
         end
 

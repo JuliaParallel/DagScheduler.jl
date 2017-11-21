@@ -4,11 +4,13 @@ struct Sched
     meta::SchedulerNodeMetadata
     reserved::Vector{TaskIdType}
     shared::SharedCircularDeque{TaskIdType}
+    stolen::Set{TaskIdType}
+    expanded::Set{TaskIdType}
     help_threshold::Int
     debug::Bool
 
     function Sched(name::String, metastore::String, help_threshold::Int; share_limit::Int=1024, debug::Bool=false)
-        new(hash(name), name, SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false), help_threshold, debug)
+        new(hash(name), name, SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false), Set{TaskIdType}(), Set{TaskIdType}(), help_threshold, debug)
     end
 end
 
@@ -63,7 +65,11 @@ end
 
 function keep(env::Sched, executable::Any, depth::Int=1, isreserved::Bool=true)
     task = taskid(executable)
-    cond_set_executable(env.meta, task, executable, (existing)->false, false)
+    if isreserved
+        set_executable(env.meta, task, executable)
+    else
+        cond_set_executable(env.meta, task, executable, (existing)->false, false)
+    end
     keep(env, task, depth, isreserved, executable)
 end
 
@@ -71,17 +77,22 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
     #tasklog(env, "in keep for task $(task) depth $depth")
     has_result(env.meta, task) && (return true)
 
-    if cond_set_executor(env.meta, task, env.id, (existing)->((existing == 0) || (existing == env.id)), false)
+    canreserve = isreserved || cond_set_executor(env.meta, task, env.id, (existing)->((existing == 0) || (existing == env.id)), false)
+
+    if canreserve
         #tasklog(env, "enqueue task $(task) depth $depth")
         enqueue(env, task, isreserved)
         depth -= 1
         if depth >=0
             (executable == nothing) && (executable = get_executable(env.meta, task))
-            if istask(executable)
+            if istask(executable) && !(task in env.expanded)
                 for input in inputs(executable)
-                    #tasklog(env, "will keep dependency input for executable $(task)")
-                    keep(env, input, depth, isreserved && !should_share(env))
+                    if istask(input)
+                        #tasklog(env, "will keep dependency input for executable $(task)")
+                        keep(env, input, depth, isreserved && !should_share(env))
+                    end
                 end
+                push!(env.expanded, task)
             end
         end
     #else
@@ -95,14 +106,19 @@ function steal(env::Sched, from::SchedPeer)
         has_shared(from) || (return NoTask)
         task = shift!(from.shared)
         cond_set_executor(env.meta, task, env.id, (existing)->((existing == 0) || (existing == from.id)), false)
+        push!(env.stolen, task)
         return task
     end
 end
 
+was_stolen(env::Sched, task::TaskIdType) = task in env.stolen
+
 inputs_available(env::Sched, task::TaskIdType) = inputs_available(env, get_executable(env.meta, task))
 function inputs_available(env::Sched, executable::Thunk)
     for inp in inputs(executable)
-        has_result(env.meta, taskid(inp)) || (return false)
+        if istask(inp)
+            has_result(env.meta, taskid(inp)) || (return false)
+        end
     end
     true
 end
@@ -135,7 +151,7 @@ function reserve(env::Sched)
     (restask === NoTask) && (L > 0) && (restask = data[L])
 
     # mark the executor
-    (restask !== NoTask) && cond_set_executor(env.meta, restask, env.id, (existing)->((existing == 0) || (existing == env.id)), false)
+    #(restask !== NoTask) && cond_set_executor(env.meta, restask, env.id, (existing)->((existing == 0) || (existing == env.id)), false)
     tasklog(env, (restask !== NoTask) ? "reserved $(restask)" : "reserved notask")
     restask
 end
@@ -179,7 +195,7 @@ function exec(env::Sched, task::TaskIdType)
     if isa(res, SharedArray)
         res = convert(Array, res)
     end
-    set_result(env.meta, task, res)
+    was_stolen(env, task) ? export_result(env.meta, task, res) : set_result(env.meta, task, res)
     true
 end
 
