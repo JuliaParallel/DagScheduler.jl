@@ -5,6 +5,7 @@
 function runbroker(broker_name::String, t, executors::Vector{String}; metastore::String="/dev/shm/scheduler", slowdown::Bool=false, debug::Bool=false)
     env = Sched(broker_name, metastore, typemax(Int); debug=debug)
     tasklog(env, "broker invoked")
+    t = dref_to_fref(t)
 
     nstolen = 0
     peers = SchedPeer[]
@@ -44,7 +45,8 @@ function runbroker(broker_name::String, t, executors::Vector{String}; metastore:
 
         #tasklog(env, "broker stole $nstolen tasks")
         info("broker stole $nstolen tasks")
-        get_result(env.meta, root)
+        res = get_result(env.meta, root)
+        isa(res, Chunk) ? collect(res) : res
     catch ex
         taskexception(env, ex, catch_backtrace())
     end

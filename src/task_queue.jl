@@ -165,7 +165,10 @@ function release(env::Sched, task::TaskIdType, complete::Bool)
 end
 
 _collect(env, x::Chunk) = collect(x)
-_collect(env, x::Union{Thunk,Function}) = get_result(env.meta, taskid(x))
+function _collect(env, x::Union{Thunk,Function})
+    res = get_result(env.meta, taskid(x))
+    isa(res, Chunk) ? collect(res) : res
+end
 _collect(env, x) = x
 function exec(env::Sched, task::TaskIdType)
     has_result(env.meta, task) && (return true)
@@ -195,7 +198,14 @@ function exec(env::Sched, task::TaskIdType)
     if isa(res, SharedArray)
         res = convert(Array, res)
     end
-    was_stolen(env, task) ? export_result(env.meta, task, res) : set_result(env.meta, task, res)
+    if was_stolen(env, task)
+        if isa(res, Chunk) && isa(res.handle, DRef)
+            res = chunktodisk(res)
+        end
+        export_result(env.meta, task, res)
+    else
+        set_result(env.meta, task, res)
+    end
     true
 end
 

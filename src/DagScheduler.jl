@@ -5,6 +5,7 @@ using Semaphores
 using SharedDataStructures
 using Dagger
 using LMDB
+using MemPool
 
 import Dagger: istask, inputs, Chunk
 import LMDB: MDBValue, close

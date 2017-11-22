@@ -27,3 +27,28 @@ function collect_chunks(dag)
        return dag
     end
 end
+
+#=
+function get_drefs(dag, bucket::Vector{Chunk}=Vector{Chunk}())
+   if isa(dag, Chunk)
+       if isa(dag.handle, DRef)
+           push!(bucket, dag)
+       end
+   elseif isa(dag, Thunk)
+       map(x->get_drefs(x, bucket), dag.inputs)
+   end
+   bucket
+end
+
+get_frefs(dag) = map(chunktodisk, get_drefs(dag))
+=#
+
+chunktodisk(chunk) = Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), true)
+
+function dref_to_fref(dag)
+    if isa(dag, Thunk)
+        dag.inputs = map(x->isa(x,Chunk) ? chunktodisk(x) : x, dag.inputs)
+        map(x->dref_to_fref(x), dag.inputs)
+    end
+    dag
+end
