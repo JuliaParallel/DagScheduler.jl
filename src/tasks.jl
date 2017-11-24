@@ -1,10 +1,45 @@
+ping(env::Sched, event=nothing) = put!(env.pinger, event)
+
+function do_broking(env::Sched, root)
+    tasklog(env, "broker waiting for ping")
+    pinger = env.pinger
+    take!(pinger)
+    while isready(pinger)
+        take!(pinger)
+    end
+    !has_result(env.meta, root)
+end
+
+function steal_from_peers(env::Sched, peers::Vector{SchedPeer})
+    stealbufsz = length(peers) - 1  # do not steal when there's only one peer!
+    nstolen = 0
+
+    peers = shuffle(peers)
+
+    if !has_shared(env, stealbufsz)
+        tasklog(env, "broker trying to steal tasks")
+        for idx in 1:length(peers)
+            has_shared(env, stealbufsz) && break
+            peer_env = peers[idx]
+            while !has_shared(env, stealbufsz)
+                task = steal(env, peer_env)
+                (task === NoTask) && break
+                keep(env, task, 0, false)
+                nstolen += 1
+                tasklog(env, "broker stole task $task from executor $(peer_env.id) ($(peer_env.name))")
+            end
+        end
+    end
+    nstolen
+end
+
 #-------------------------------------------------------------------
 # broker provides the initial tasks and coordinates among executors
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
-function runbroker(broker_name::String, t, executors::Vector{String}; metastore::String="/dev/shm/scheduler", slowdown::Bool=false, debug::Bool=false)
+function runbroker(broker_name::String, t, executors::Vector{String}, pinger::RemoteChannel; metastore::String="/dev/shm/scheduler", debug::Bool=false)
     @everywhere MemPool.enable_who_has_read[] = false
-    env = Sched(broker_name, metastore, typemax(Int); debug=debug)
+    env = Sched(broker_name, :broker, pinger, metastore, typemax(Int); debug=debug)
     tasklog(env, "broker invoked")
     t = dref_to_fref(t)
 
@@ -14,34 +49,16 @@ function runbroker(broker_name::String, t, executors::Vector{String}; metastore:
         task = root = taskid(t)
         keep(env, t, 0, false)
         tasklog(env, "broker started with $(task)")
-        executable = get_executable(env.meta, task)
-        tasklog(env, "broker verified $(task) as $executable")
 
         # connect to the executor deques
         for executor_name in executors
             push!(peers, SchedPeer(executor_name))
             tasklog(env, "broker connected to peer $executor_name")
         end
-        stealbufsz = length(peers) - 1  # do not steal when there's only one peer!
-        stealinterval = 0.3
 
         # steal tasks from executors and make them available to other executors
-        while !has_result(env.meta, root)
-            if !has_shared(env, stealbufsz)
-                tasklog(env, "broker trying to steal tasks")
-                for idx in 1:length(peers)
-                    has_shared(env, stealbufsz) && break
-                    peer_env = peers[idx]
-                    task = steal(env, peer_env)
-                    if task !== NoTask
-                        keep(env, task, 0, false)
-                        nstolen += 1
-                        tasklog(env, "broker stole task $task from executor $(peer_env.id) ($(peer_env.name))")
-                    end
-                end
-            end
-            yield()
-            sleep(stealinterval)
+        while do_broking(env, root)
+            nstolen += steal_from_peers(env, peers)
         end
 
         #tasklog(env, "broker stole $nstolen tasks")
@@ -56,8 +73,8 @@ function runbroker(broker_name::String, t, executors::Vector{String}; metastore:
     end
 end
 
-function runexecutor(broker_name::String, executor_name::String, root_t; metastore::String="/dev/shm/scheduler", slowdown::Bool=false, debug::Bool=false, help_threshold::Int=typemax(Int))
-    env = Sched(executor_name, metastore, help_threshold; debug=debug)
+function runexecutor(broker_name::String, executor_name::String, root_t, pinger::RemoteChannel; metastore::String="/dev/shm/scheduler", debug::Bool=false, help_threshold::Int=typemax(Int))
+    env = Sched(executor_name, :executor, pinger, metastore, help_threshold; debug=debug)
     tasklog(env, "executor starting")
     broker = SchedPeer(broker_name)
     nstolen = 0
@@ -69,7 +86,6 @@ function runexecutor(broker_name::String, executor_name::String, root_t; metasto
         lasttask = task
 
         while !has_result(env.meta, root)
-            slowdown && sleep(0.3)
             tasklog(env, "executor trying to do tasks, remaining $(length(env.reserved)), shared $(length(env.shared))")
             task = reserve(env)
 
@@ -77,14 +93,10 @@ function runexecutor(broker_name::String, executor_name::String, root_t; metasto
             if task === NoTask || task === lasttask
                 tasklog(env, "got notask or lasttask, will steal")
                 task = steal(env, broker)
+                ping(env)
                 if task === NoTask
                     tasklog(env, "stole notask")
-                    ## if no runnable tasks, update results of stolen tasks
-                    #for stolentask in filter(x->isstolen(executor_env,x,executor_id), executor_env.stack.data)
-                    #    release(executor_env, stolentask, iscomplete(executor_env.results, stolentask))
-                    #end
                 else
-                    tasklog(env, "keeping task $task")
                     keep(env, task, 0, true)
                     nstolen += 1
                     tasklog(env, "executor stole $(task), remaining $(length(env.reserved))")
@@ -106,21 +118,21 @@ function runexecutor(broker_name::String, executor_name::String, root_t; metasto
                 tasklog(env, "executor $(task) is complete: $complete, remaining $(length(env.reserved))")
             end
             lasttask = task
-            yield()
         end
         #tasklog(env, "executor stole $nstolen and completed $nexecuted")
-        info("executor stole $nstolen and completed $nexecuted")
     catch ex
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
     end
-    tasklog(env, "executor done")
+    #tasklog(env, "executor done")
+    (nstolen, nexecuted)
 end
 
-function rundag(dag; nexecutors::Int=nworkers(), slowdown::Bool=false, debug::Bool=false)
+function rundag(dag; nexecutors::Int=nworkers(), debug::Bool=false)
     executor_tasks = Future[]
     executors = String[]
     deques = SharedCircularDeque{TaskIdType}[]
+    pinger = RemoteChannel()
 
     runpath = "/dev/shm"
     # create and initialize the shared dict
@@ -143,12 +155,17 @@ function rundag(dag; nexecutors::Int=nworkers(), slowdown::Bool=false, debug::Bo
         for idx in 1:length(executors)
             executorpath = executors[idx]
             info("spawning executor $executorpath")
-            executor_task = @spawnat (idx+1) runexecutor(brokerpath, executorpath, dag; slowdown=slowdown, debug=debug, metastore=metastore, help_threshold=1)
+            executor_task = @spawnat (idx+1) runexecutor(brokerpath, executorpath, dag, pinger; debug=debug, metastore=metastore, help_threshold=1)
             push!(executor_tasks, executor_task)
         end
 
         info("spawning broker")
-        runbroker(brokerpath, dag, executors; slowdown=slowdown, debug=debug, metastore=metastore)
+        res = runbroker(brokerpath, dag, executors, pinger; debug=debug, metastore=metastore)
+        while sum(map(isready, executor_tasks)) < length(executor_tasks)
+            isready(pinger) && take!(pinger)
+        end
+        map(x->info("executor stole $(x[1]) and executed $(x[2])"), executor_tasks)
+        res
     finally
         map(SharedDataStructures.delete!, deques)
         map(rm, executors)

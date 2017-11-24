@@ -1,23 +1,29 @@
 struct Sched
-    id::UInt64
-    name::String
-    meta::SchedulerNodeMetadata
-    reserved::Vector{TaskIdType}
-    shared::SharedCircularDeque{TaskIdType}
-    stolen::Set{TaskIdType}
-    expanded::Set{TaskIdType}
-    help_threshold::Int
-    debug::Bool
+    id::UInt64                                  # component id
+    name::String                                # component name
+    role::Symbol                                # :executor or :broker
+    pinger::RemoteChannel                       # signalling channel between peers
+    meta::SchedulerNodeMetadata                 # node level shared metadata store
+    reserved::Vector{TaskIdType}                # tasks reserved for this component
+    shared::SharedCircularDeque{TaskIdType}     # tasks put out by this component for sharing
+    stolen::Set{TaskIdType}                     # tasks that this component has stolen from others
+    expanded::Set{TaskIdType}                   # tasks that have been expanded (not new tasks)
+    help_threshold::Int                         # threshold for putting out tasks for sharing
+    debug::Bool                                 # switch on debug logging
 
-    function Sched(name::String, metastore::String, help_threshold::Int; share_limit::Int=1024, debug::Bool=false)
-        new(hash(name), name, SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false), Set{TaskIdType}(), Set{TaskIdType}(), help_threshold, debug)
+    function Sched(name::String, role::Symbol, pinger::RemoteChannel, metastore::String, help_threshold::Int; share_limit::Int=1024, debug::Bool=false)
+        new(hash(name), name, role, pinger,
+            SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false),
+            Set{TaskIdType}(), Set{TaskIdType}(),
+            help_threshold, debug)
     end
 end
 
 struct SchedPeer
-    id::UInt64
-    name::String
-    shared::SharedCircularDeque{TaskIdType}
+    id::UInt64                                  # peer componet id
+    name::String                                # peer name
+    shared::SharedCircularDeque{TaskIdType}     # tasks put out by peer for sharing
+
     function SchedPeer(name::String; share_limit::Int=1024)
         new(hash(name), name, SharedCircularDeque{TaskIdType}(name, share_limit; create=false))
     end
@@ -82,6 +88,7 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
     if canreserve
         #tasklog(env, "enqueue task $(task) depth $depth")
         enqueue(env, task, isreserved)
+        !isreserved && (env.role === :executor) && ping(env)
         depth -= 1
         if depth >=0
             (executable == nothing) && (executable = get_executable(env.meta, task))

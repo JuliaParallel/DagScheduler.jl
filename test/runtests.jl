@@ -10,18 +10,18 @@ const dag2 = gen_sort_dag()
 addprocs(5)
 using DagScheduler
 
-result = rundag(dag1, nexecutors=nworkers(), slowdown=false, debug=false)
+result = rundag(dag1, nexecutors=nworkers(), debug=false)
 info("result = ", result)
 @test result == 1
 
 #=
 const dag3 = gen_cross_dag()
-result = rundag(dag3, nexecutors=nworkers(), slowdown=false, debug=false)
+result = rundag(dag3, nexecutors=nworkers(), debug=false)
 info("result = ", result)
 @test result == 84
 =#
 
-result = rundag(dag2, nexecutors=nworkers(), slowdown=false, debug=false)
+result = rundag(dag2, nexecutors=nworkers(), debug=false)
 info("result = ", result)
 @test issorted(result)
 
