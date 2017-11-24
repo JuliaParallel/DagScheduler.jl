@@ -28,7 +28,6 @@ function collect_chunks(dag)
     end
 end
 
-#=
 function get_drefs(dag, bucket::Vector{Chunk}=Vector{Chunk}())
    if isa(dag, Chunk)
        if isa(dag.handle, DRef)
@@ -40,6 +39,7 @@ function get_drefs(dag, bucket::Vector{Chunk}=Vector{Chunk}())
    bucket
 end
 
+#=
 get_frefs(dag) = map(chunktodisk, get_drefs(dag))
 =#
 
@@ -47,7 +47,7 @@ chunktodisk(chunk) = Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handl
 
 function dref_to_fref(dag)
     if isa(dag, Thunk)
-        dag.inputs = map(x->isa(x,Chunk) ? chunktodisk(x) : x, dag.inputs)
+        dag.inputs = map(x->(isa(x,Chunk) && isa(x.handle, DRef)) ? chunktodisk(x) : x, dag.inputs)
         map(x->dref_to_fref(x), dag.inputs)
     end
     dag

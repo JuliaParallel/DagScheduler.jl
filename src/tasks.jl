@@ -3,6 +3,7 @@
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
 function runbroker(broker_name::String, t, executors::Vector{String}; metastore::String="/dev/shm/scheduler", slowdown::Bool=false, debug::Bool=false)
+    @everywhere MemPool.enable_who_has_read[] = false
     env = Sched(broker_name, metastore, typemax(Int); debug=debug)
     tasklog(env, "broker invoked")
     t = dref_to_fref(t)
@@ -46,9 +47,12 @@ function runbroker(broker_name::String, t, executors::Vector{String}; metastore:
         #tasklog(env, "broker stole $nstolen tasks")
         info("broker stole $nstolen tasks")
         res = get_result(env.meta, root)
-        isa(res, Chunk) ? collect(res) : res
+        return isa(res, Chunk) ? collect(res) : res
     catch ex
         taskexception(env, ex, catch_backtrace())
+        rethrow(ex)
+    #finally
+    #    @everywhere MemPool.cleanup()
     end
 end
 
@@ -108,6 +112,7 @@ function runexecutor(broker_name::String, executor_name::String, root_t; metasto
         info("executor stole $nstolen and completed $nexecuted")
     catch ex
         taskexception(env, ex, catch_backtrace())
+        rethrow(ex)
     end
     tasklog(env, "executor done")
 end

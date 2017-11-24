@@ -173,39 +173,47 @@ _collect(env, x) = x
 function exec(env::Sched, task::TaskIdType)
     has_result(env.meta, task) && (return true)
 
+    # run the task
     t = get_executable(env.meta, task)
     if istask(t)
-        #res = t.f(map(x->_collect(result(env.results,x)), inputs(t))...)
-        #inps = map(x->_collect(env,x), inputs(t))
-        #try
-        #res = t.f(inps...)
-        #(res == nothing) && error("got nothing output")
-        #catch ex
-        #    info("I had: $inps")
-        #    info("For: $(inputs(t))")
-        #    info("To function $t")
-        #    rethrow(ex)
-        #end
         res = t.f(map(x->_collect(env,x), inputs(t))...)
     elseif isa(t, Function)
         res = t()
     else
         res = t
     end
+
+    # collect the result
     if isa(res, Chunk)
         res = collect(res)
     end
     if isa(res, SharedArray)
         res = convert(Array, res)
     end
+
+    # export (if other processes need it) or keep in memory (for use in-process) the result
     if was_stolen(env, task)
         if isa(res, Chunk) && isa(res.handle, DRef)
             res = chunktodisk(res)
         end
         export_result(env.meta, task, res)
+        del_executable(env.meta, task)
     else
         set_result(env.meta, task, res)
+        _procdel(env.meta, NodeMetaKey(task,M_EXECUTABLE))
     end
+
+    # clean up task inputs, we don't need them anymore
+    if istask(t)
+        for inp in t.inputs
+            if isa(inp, Chunk)
+                pooldelete(inp.handle)
+            #elseif istask(inp)
+            #    _procdel(env.meta, NodeMetaKey(task,M_RESULT))
+            end
+        end
+    end
+
     true
 end
 
