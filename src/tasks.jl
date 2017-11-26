@@ -1,4 +1,4 @@
-ping(env::Sched, event=nothing) = put!(env.pinger, event)
+ping(env::Sched, event=nothing) = isready(env.pinger) || put!(env.pinger, event)
 
 function do_broking(env::Sched, root)
     tasklog(env, "broker waiting for ping")
@@ -119,6 +119,7 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
             end
             lasttask = task
         end
+        ping(env)
         #tasklog(env, "executor stole $nstolen and completed $nexecuted")
     catch ex
         taskexception(env, ex, catch_backtrace())

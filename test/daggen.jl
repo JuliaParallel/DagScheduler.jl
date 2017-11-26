@@ -61,7 +61,7 @@ end
 import Dagger: dsort_chunks
 
 function gen_sort_dag()
-    cs = compute(rand(Blocks(10), 1000)).chunks
+    cs = compute(rand(Blocks(10), 10000)).chunks
        lt=Base.isless
        by=identity
        rev=false
