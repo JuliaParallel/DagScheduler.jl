@@ -200,6 +200,10 @@ function exec(env::Sched, task::TaskIdType)
 
     # export (if other processes need it) or keep in memory (for use in-process) the result
     if was_stolen(env, task)
+        if !isa(res, Chunk) && istask(t) && !t.get_result
+            # TODO: maybe should do this only if the size is beyond a certain threshold
+            res = Dagger.tochunk(res)
+        end
         if isa(res, Chunk) && isa(res.handle, DRef)
             res = chunktodisk(res)
         end

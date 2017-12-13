@@ -39,6 +39,7 @@ end
 #--------------------------------------------------------------------
 function runbroker(broker_name::String, t, executors::Vector{String}, pinger::RemoteChannel; metastore::String="/dev/shm/scheduler", debug::Bool=false)
     @everywhere MemPool.enable_who_has_read[] = false
+    @everywhere Dagger.use_shared_array[] = false
     env = Sched(broker_name, :broker, pinger, metastore, typemax(Int); debug=debug)
     tasklog(env, "broker invoked")
     t = dref_to_fref(t)

@@ -1,4 +1,5 @@
 using Dagger
+Dagger.use_shared_array[] = false
 
 f = i -> (i+1)
 g = (i, j) -> (i + j)
@@ -60,12 +61,12 @@ end
 
 import Dagger: dsort_chunks
 
-function gen_sort_dag()
+function gen_sort_dag(batchsize=4)
     cs = compute(rand(Blocks(10), 10000)).chunks
        lt=Base.isless
        by=identity
        rev=false
     ord = Base.Sort.ord(lt,by,rev,Dagger.default_ord)
 
-    dsort_chunks(cs, 1, batchsize=4, merge=(x,y)->Dagger.merge_sorted(ord, x, y))[1]
+    dsort_chunks(cs, 1, batchsize=batchsize, merge=(x,y)->Dagger.merge_sorted(ord, x, y))[1]
 end
