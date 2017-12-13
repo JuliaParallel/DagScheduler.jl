@@ -9,13 +9,14 @@ struct Sched
     stolen::Set{TaskIdType}                     # tasks that this component has stolen from others
     expanded::Set{TaskIdType}                   # tasks that have been expanded (not new tasks)
     help_threshold::Int                         # threshold for putting out tasks for sharing
+    nshared::Ref{Int}                           # cumulative number of tasks shared
     debug::Bool                                 # switch on debug logging
 
     function Sched(name::String, role::Symbol, pinger::RemoteChannel, metastore::String, help_threshold::Int; share_limit::Int=1024, debug::Bool=false)
         new(hash(name), name, role, pinger,
             SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false),
             Set{TaskIdType}(), Set{TaskIdType}(),
-            help_threshold, debug)
+            help_threshold, Ref(0), debug)
     end
 end
 
@@ -31,7 +32,14 @@ end
 
 # enqueue can enqueue either to the reserved or shared section
 # enqueuing to shared section is done under lock
-enqueue(stack::Sched, task::TaskIdType, isreserved::Bool) = enqueue(isreserved ? stack.reserved : stack.shared, task)
+function enqueue(stack::Sched, task::TaskIdType, isreserved::Bool)
+    if isreserved
+        enqueue(stack.reserved, task)
+    else
+        stack.nshared[] += 1
+        enqueue(stack.shared, task)
+    end
+end
 function enqueue(shared::SharedCircularDeque{TaskIdType}, task::TaskIdType)
     withlock(shared.lck) do
         (task in shared) || push!(shared, task)
@@ -93,10 +101,13 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
         if depth >=0
             (executable == nothing) && (executable = get_executable(env.meta, task))
             if istask(executable) && !(task in env.expanded)
+                # reserve at least one task
+                reservedforself = false
                 for input in inputs(executable)
                     if istask(input)
                         #tasklog(env, "will keep dependency input for executable $(task)")
-                        keep(env, input, depth, isreserved && !should_share(env))
+                        keep(env, input, depth, isreserved ? (!reservedforself || !should_share(env)) : false)
+                        reservedforself = true
                     end
                 end
                 push!(env.expanded, task)

@@ -38,11 +38,15 @@ end
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
 function runbroker(broker_name::String, t, executors::Vector{String}, pinger::RemoteChannel; metastore::String="/dev/shm/scheduler", debug::Bool=false)
-    @everywhere MemPool.enable_who_has_read[] = false
-    @everywhere Dagger.use_shared_array[] = false
     env = Sched(broker_name, :broker, pinger, metastore, typemax(Int); debug=debug)
     tasklog(env, "broker invoked")
-    t = dref_to_fref(t)
+    t, _elapsedtime, _bytes, _gctime, _memallocs = @timed begin
+        @everywhere MemPool.enable_who_has_read[] = false
+        @everywhere Dagger.use_shared_array[] = false
+        dref_to_fref(t)
+    end
+    info("broker preparation time: $_elapsedtime")
+
 
     nstolen = 0
     peers = SchedPeer[]
@@ -63,7 +67,7 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Re
         end
 
         #tasklog(env, "broker stole $nstolen tasks")
-        info("broker stole $nstolen tasks")
+        info("broker stole $nstolen, shared $(env.nshared[]) tasks")
         res = get_result(env.meta, root)
         return isa(res, Chunk) ? collect(res) : res
     catch ex
@@ -97,6 +101,7 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
                 ping(env)
                 if task === NoTask
                     tasklog(env, "stole notask")
+                    sleep(0.5)  # do not overwhelm the broker
                 else
                     keep(env, task, 0, true)
                     nstolen += 1
@@ -121,13 +126,13 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
             lasttask = task
         end
         ping(env)
-        #tasklog(env, "executor stole $nstolen and completed $nexecuted")
+        #tasklog(env, "executor $(env.name) stole $nstolen, shared $(env.nshared[]), completed $nexecuted tasks")
     catch ex
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
     end
     #tasklog(env, "executor done")
-    (nstolen, nexecuted)
+    (nstolen, env.nshared[], nexecuted)
 end
 
 function rundag(dag; nexecutors::Int=nworkers(), debug::Bool=false)
@@ -157,7 +162,7 @@ function rundag(dag; nexecutors::Int=nworkers(), debug::Bool=false)
         for idx in 1:length(executors)
             executorpath = executors[idx]
             info("spawning executor $executorpath")
-            executor_task = @spawnat (idx+1) runexecutor(brokerpath, executorpath, dag, pinger; debug=debug, metastore=metastore, help_threshold=1)
+            executor_task = @spawnat (idx+1) runexecutor(brokerpath, executorpath, dag, pinger; debug=debug, metastore=metastore, help_threshold=(nexecutors-1))
             push!(executor_tasks, executor_task)
         end
 
@@ -166,7 +171,7 @@ function rundag(dag; nexecutors::Int=nworkers(), debug::Bool=false)
         while sum(map(isready, executor_tasks)) < length(executor_tasks)
             isready(pinger) && take!(pinger)
         end
-        map(x->info("executor stole $(x[1]) and executed $(x[2])"), executor_tasks)
+        map(x->info("executor stole $(x[1]), shared $(x[2]) and executed $(x[3])"), executor_tasks)
         res
     finally
         map(SharedDataStructures.delete!, deques)

@@ -61,11 +61,11 @@ end
 
 import Dagger: dsort_chunks
 
-function gen_sort_dag(batchsize=4)
-    cs = compute(rand(Blocks(10), 10000)).chunks
-       lt=Base.isless
-       by=identity
-       rev=false
+function gen_sort_dag(totalsz=10^6, nchunks=40, batchsize=4)
+    cs = compute(rand(Blocks(ceil(Int,totalsz/nchunks)), totalsz)).chunks
+    lt = Base.isless
+    by = identity
+    rev = false
     ord = Base.Sort.ord(lt,by,rev,Dagger.default_ord)
 
     dsort_chunks(cs, 1, batchsize=batchsize, merge=(x,y)->Dagger.merge_sorted(ord, x, y))[1]
