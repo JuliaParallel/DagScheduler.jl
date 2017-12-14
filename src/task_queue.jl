@@ -201,14 +201,6 @@ function exec(env::Sched, task::TaskIdType)
         res = t
     end
 
-    # collect the result
-    if isa(res, Chunk)
-        res = collect(res)
-    end
-    if isa(res, SharedArray)
-        res = convert(Array, res)
-    end
-
     # export (if other processes need it) or keep in memory (for use in-process) the result
     if was_stolen(env, task)
         if !isa(res, Chunk) && istask(t) && !t.get_result
