@@ -43,12 +43,25 @@ end
 get_frefs(dag) = map(chunktodisk, get_drefs(dag))
 =#
 
-chunktodisk(chunk) = Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), true)
+chunktodisk(chunk) = Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), chunk.persist)
 
-function dref_to_fref(dag)
-    if isa(dag, Thunk)
-        dag.inputs = map(x->(isa(x,Chunk) && isa(x.handle, DRef)) ? chunktodisk(x) : x, dag.inputs)
-        map(x->dref_to_fref(x), dag.inputs)
-    end
-    dag
+function walk_dag(dag_node, fn=identity)
+    isa(dag_node, Thunk) && (dag_node.inputs = map(x->walk_dag(x, fn), dag_node.inputs))
+    fn(dag_node)
 end
+
+persist_chunks!(dag) = walk_dag(dag, (node) -> begin
+    if isa(node, Chunk)
+        node.persist = true
+    end
+    node
+end)
+
+dref_to_fref(dag) = dref_to_fref!(deepcopy(dag))
+dref_to_fref!(dag) = walk_dag(dag, (node) -> begin
+    if isa(node, Chunk) && isa(node.handle, DRef)
+        chunktodisk(node)
+    else
+        node
+    end
+end)

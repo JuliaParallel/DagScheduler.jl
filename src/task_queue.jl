@@ -220,7 +220,7 @@ function exec(env::Sched, task::TaskIdType)
     # clean up task inputs, we don't need them anymore
     if istask(t)
         for inp in t.inputs
-            if isa(inp, Chunk)
+            if isa(inp, Chunk) && !inp.persist
                 pooldelete(inp.handle)
             #elseif istask(inp)
             #    _procdel(env.meta, NodeMetaKey(task,M_RESULT))

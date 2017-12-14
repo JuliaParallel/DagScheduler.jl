@@ -101,7 +101,7 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
                 ping(env)
                 if task === NoTask
                     tasklog(env, "stole notask")
-                    sleep(0.5)  # do not overwhelm the broker
+                    sleep(0.2)  # do not overwhelm the broker
                 else
                     keep(env, task, 0, true)
                     nstolen += 1
