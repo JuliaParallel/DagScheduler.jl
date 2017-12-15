@@ -47,7 +47,6 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Re
     end
     #info("broker preparation time: $_elapsedtime")
 
-
     nstolen = 0
     peers = SchedPeer[]
     try
@@ -135,47 +134,80 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
     (nstolen, env.nshared[], nexecuted)
 end
 
-function rundag(dag; nexecutors::Int=nworkers(), debug::Bool=false)
-    executor_tasks = Future[]
-    executors = String[]
-    deques = SharedCircularDeque{TaskIdType}[]
-    pinger = RemoteChannel()
+struct RunEnv
+    runpath::String
+    broker::String
+    executors::Vector{String}
+    metastore::String
+    executor_tasks::Vector{Future}
+    deques::Vector{SharedCircularDeque{TaskIdType}}
+    pinger::RemoteChannel{Channel{Any}}
+    debug::Bool
 
-    runpath = "/dev/shm"
-    # create and initialize the shared dict
-    metastore = joinpath(runpath, "scheduler")
-    isdir(metastore) && rm(metastore; recursive=true)
-    mkpath(metastore)
+    function RunEnv(nexecutors::Int=nworkers(), debug::Bool=false)
+        executor_tasks = Future[]
+        executors = String[]
+        deques = SharedCircularDeque{TaskIdType}[]
+        pinger = RemoteChannel()
 
-    # create and initialize the circular deques
-    brokerpath = joinpath(runpath, "broker")
-    mkpath(brokerpath)
-    push!(deques, SharedCircularDeque{TaskIdType}(brokerpath, 1024; create=true))
-    for idx in 1:nexecutors
-        executorpath = joinpath(runpath, "executor$idx")
-        mkpath(executorpath)
-        push!(deques, SharedCircularDeque{TaskIdType}(executorpath, 1024; create=true))
-        push!(executors, executorpath)
+        runpath = "/dev/shm"
+        # create and initialize the shared dict
+        metastore = joinpath(runpath, "scheduler")
+        isdir(metastore) && rm(metastore; recursive=true)
+        mkpath(metastore)
+
+        # create and initialize the circular deques
+        brokerpath = joinpath(runpath, "broker")
+        mkpath(brokerpath)
+        push!(deques, SharedCircularDeque{TaskIdType}(brokerpath, 1024; create=true))
+        for idx in 1:nexecutors
+            executorpath = joinpath(runpath, "executor$idx")
+            mkpath(executorpath)
+            push!(deques, SharedCircularDeque{TaskIdType}(executorpath, 1024; create=true))
+            push!(executors, executorpath)
+        end
+
+        new(runpath, brokerpath, executors, metastore, executor_tasks, deques, pinger, debug)
     end
+end
+
+function wait_for_executors(runenv::RunEnv)
+    tasks = runenv.executor_tasks
+    pinger = runenv.pinger
+    while sum(map(isready, tasks)) < length(tasks)
+        isready(pinger) && take!(pinger)
+    end
+    #map(x->info("executor stole $(x[1]), shared $(x[2]) and executed $(x[3])"), tasks)
+    nothing
+end
+
+function cleanup(runenv::RunEnv)
+    map(SharedDataStructures.delete!, runenv.deques)
+    map(rm, runenv.executors)
+    map((path)->rm(path; recursive=true), [runenv.metastore, runenv.broker])
+    map(empty!, (runenv.executors, runenv.executor_tasks, runenv.deques))
+    nothing
+end
+
+function rundag(dag; nexecutors::Int=nworkers(), debug::Bool=false)
+    runenv = RunEnv(nexecutors, debug)
+    metastore = runenv.metastore
+    pinger = runenv.pinger
+    broker = runenv.broker
 
     try
-        for idx in 1:length(executors)
-            executorpath = executors[idx]
+        for idx in 1:length(runenv.executors)
+            executorpath = runenv.executors[idx]
             #info("spawning executor $executorpath")
-            executor_task = @spawnat (idx+1) runexecutor(brokerpath, executorpath, dag, pinger; debug=debug, metastore=metastore, help_threshold=(nexecutors-1))
-            push!(executor_tasks, executor_task)
+            executor_task = @spawnat (idx+1) runexecutor(broker, executorpath, dag, pinger; debug=debug, metastore=metastore, help_threshold=(nexecutors-1))
+            push!(runenv.executor_tasks, executor_task)
         end
 
         #info("spawning broker")
-        res = runbroker(brokerpath, dag, executors, pinger; debug=debug, metastore=metastore)
-        while sum(map(isready, executor_tasks)) < length(executor_tasks)
-            isready(pinger) && take!(pinger)
-        end
-        #map(x->info("executor stole $(x[1]), shared $(x[2]) and executed $(x[3])"), executor_tasks)
+        res = runbroker(broker, dag, runenv.executors, pinger; debug=debug, metastore=metastore)
+        wait_for_executors(runenv)
         res
     finally
-        map(SharedDataStructures.delete!, deques)
-        map(rm, executors)
-        map((path)->rm(path; recursive=true), [metastore, brokerpath])
+        cleanup(runenv)
     end
 end
