@@ -39,13 +39,8 @@ end
 #--------------------------------------------------------------------
 function runbroker(broker_name::String, t, executors::Vector{String}, pinger::RemoteChannel; metastore::String="/dev/shm/scheduler", debug::Bool=false)
     env = Sched(broker_name, :broker, pinger, metastore, typemax(Int); debug=debug)
+    reset(env, t)
     tasklog(env, "broker invoked")
-    t, _elapsedtime, _bytes, _gctime, _memallocs = @timed begin
-        @everywhere MemPool.enable_who_has_read[] = false
-        @everywhere Dagger.use_shared_array[] = false
-        dref_to_fref(t)
-    end
-    #info("broker preparation time: $_elapsedtime")
 
     nstolen = 0
     peers = SchedPeer[]
@@ -79,6 +74,7 @@ end
 
 function runexecutor(broker_name::String, executor_name::String, root_t, pinger::RemoteChannel; metastore::String="/dev/shm/scheduler", debug::Bool=false, help_threshold::Int=typemax(Int))
     env = Sched(executor_name, :executor, pinger, metastore, help_threshold; debug=debug)
+    reset(env, root_t)
     tasklog(env, "executor starting")
     broker = SchedPeer(broker_name)
     nstolen = 0
@@ -190,6 +186,13 @@ function cleanup(runenv::RunEnv)
 end
 
 function rundag(dag; nexecutors::Int=nworkers(), debug::Bool=false)
+    dag, _elapsedtime, _bytes, _gctime, _memallocs = @timed begin
+        @everywhere MemPool.enable_who_has_read[] = false
+        @everywhere Dagger.use_shared_array[] = false
+        dref_to_fref(dag)
+    end
+    #info("dag preparation time: $_elapsedtime")
+
     runenv = RunEnv(nexecutors, debug)
     metastore = runenv.metastore
     pinger = runenv.pinger

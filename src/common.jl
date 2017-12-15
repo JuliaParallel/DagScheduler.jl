@@ -3,8 +3,8 @@ const TaskIdType = UInt64
 const NoTask = TaskIdType(0)
 taskid(id::TaskIdType) = id
 taskid(th::Thunk) = TaskIdType(th.id)
-taskid(ch::Chunk) = TaskIdType(hash(collect(ch)))
-taskid(executable) = TaskIdType(hash(executable))
+#taskid(ch::Chunk) = TaskIdType(hash(collect(ch)))
+#taskid(executable) = TaskIdType(hash(executable))
 
 function tasklog(env, msg...)
     env.debug && info(env.name, " : ", env.id, " : ", msg...)
@@ -65,3 +65,18 @@ dref_to_fref!(dag) = walk_dag(dag, (node) -> begin
         node
     end
 end)
+
+function find_task(dag, task::TaskIdType)
+    if isa(dag, Thunk)
+        if taskid(dag) === task
+            return dag
+        else
+            for inp in dag.inputs
+                match = find_task(inp, task)
+                (match === nothing) && continue
+                return match
+            end
+        end
+    end
+    nothing
+end

@@ -12,9 +12,8 @@
 # TODO:
 # - reference counting and purging
 
-const M_EXECUTABLE = UInt8(1)
-const M_EXECUTOR = UInt8(2)
-const M_RESULT = UInt8(3)
+const M_EXECUTOR = UInt8(1)
+const M_RESULT = UInt8(2)
 
 struct NodeMetaKey
     id::TaskIdType
@@ -38,7 +37,6 @@ function meta_ser(x)
 end
 
 const ATTR_PROPS = [
-    NodeAttrProp(meta_ser, meta_deser, Vector{UInt8}),
     NodeAttrProp(identity, identity, UInt64),
     NodeAttrProp(meta_ser, meta_deser, Vector{UInt8})
 ]
@@ -191,26 +189,20 @@ function _cond_set(M::SchedulerNodeMetadata, key::NodeMetaKey, val, cond::Functi
     updated
 end
 
-has_executable(M::SchedulerNodeMetadata, id::TaskIdType)                = _cached_has(M, NodeMetaKey(id,M_EXECUTABLE))
 has_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_has(M, NodeMetaKey(id,M_RESULT))
 has_executor(M::SchedulerNodeMetadata, id::TaskIdType)                  = _cached_has(M, NodeMetaKey(id,M_EXECUTOR))
 
-del_executable(M::SchedulerNodeMetadata, id::TaskIdType)                = _cached_del(M, NodeMetaKey(id,M_EXECUTABLE))
 del_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_del(M, NodeMetaKey(id,M_RESULT))
 del_executor(M::SchedulerNodeMetadata, id::TaskIdType)                  = _cached_del(M, NodeMetaKey(id,M_EXECUTOR))
 
-get_executable(M::SchedulerNodeMetadata, id::TaskIdType)                = _cached_get(M, NodeMetaKey(id,M_EXECUTABLE))
 get_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_get(M, NodeMetaKey(id,M_RESULT))
 get_executor(M::SchedulerNodeMetadata, id::TaskIdType)                  = _get(M, NodeMetaKey(id,M_EXECUTOR))::Union{UInt64,Void}
 
-set_executable(M::SchedulerNodeMetadata, id::TaskIdType, val)           = _procset(M, NodeMetaKey(id,M_EXECUTABLE), val)
 set_result(M::SchedulerNodeMetadata, id::TaskIdType, val)               = _procset(M, NodeMetaKey(id,M_RESULT), val)
 set_executor(M::SchedulerNodeMetadata, id::TaskIdType, val::UInt64)     = _procset(M, NodeMetaKey(id,M_EXECUTOR), val)
 
-export_executable(M::SchedulerNodeMetadata, id::TaskIdType, val)        = _cached_set(M, NodeMetaKey(id,M_EXECUTABLE), val)
 export_result(M::SchedulerNodeMetadata, id::TaskIdType, val)            = _cached_set(M, NodeMetaKey(id,M_RESULT), val)
 export_executor(M::SchedulerNodeMetadata, id::TaskIdType, val::UInt64)  = _cached_set(M, NodeMetaKey(id,M_EXECUTOR), val)
 
-cond_set_executable(M::SchedulerNodeMetadata, id::TaskIdType, val, cond::Function, update_only::Bool)   = _cond_set(M, NodeMetaKey(id,M_EXECUTABLE), val, cond, update_only)
 cond_set_result(M::SchedulerNodeMetadata, id::TaskIdType, val, cond::Function, update_only::Bool)       = _cond_set(M, NodeMetaKey(id,M_RESULT), val, cond, update_only)
 cond_set_executor(M::SchedulerNodeMetadata, id::TaskIdType, val, cond::Function, update_only::Bool)     = _cond_set(M, NodeMetaKey(id,M_EXECUTOR), val, cond, update_only)

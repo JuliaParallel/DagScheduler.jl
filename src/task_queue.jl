@@ -10,13 +10,14 @@ struct Sched
     expanded::Set{TaskIdType}                   # tasks that have been expanded (not new tasks)
     help_threshold::Int                         # threshold for putting out tasks for sharing
     nshared::Ref{Int}                           # cumulative number of tasks shared
+    root_task::Ref{Union{Thunk,Void}}           # the root of dag being processed
     debug::Bool                                 # switch on debug logging
 
     function Sched(name::String, role::Symbol, pinger::RemoteChannel, metastore::String, help_threshold::Int; share_limit::Int=1024, debug::Bool=false)
         new(hash(name), name, role, pinger,
             SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false),
             Set{TaskIdType}(), Set{TaskIdType}(),
-            help_threshold, Ref(0), debug)
+            help_threshold, Ref(0), Ref{Union{Thunk,Void}}(nothing), debug)
     end
 end
 
@@ -77,16 +78,17 @@ function has_shared(stack::Union{Sched,SchedPeer}, howmuch::Int)
     end
 end
 
-function keep(env::Sched, executable::Any, depth::Int=1, isreserved::Bool=true)
-    task = taskid(executable)
-    if isreserved
-        set_executable(env.meta, task, executable)
-    else
-        cond_set_executable(env.meta, task, executable, (existing)->false, false)
-    end
-    keep(env, task, depth, isreserved, executable)
+function reset(env::Sched, task::Thunk)
+    empty!(env.reserved)
+    empty!(env.stolen)
+    env.nshared[] = 0
+    env.root_task[] = task
+    nothing
 end
 
+get_executable(env::Sched, task::TaskIdType) = find_task(env.root_task[], task)
+
+keep(env::Sched, executable::Any, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
 function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true, executable::Any=nothing)
     #tasklog(env, "in keep for task $(task) depth $depth")
     has_result(env.meta, task) && (return true)
@@ -99,7 +101,7 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
         !isreserved && (env.role === :executor) && ping(env)
         depth -= 1
         if depth >=0
-            (executable == nothing) && (executable = get_executable(env.meta, task))
+            (executable == nothing) && (executable = get_executable(env, task))
             if istask(executable) && !(task in env.expanded)
                 # reserve at least one task
                 reservedforself = false
@@ -131,7 +133,7 @@ end
 
 was_stolen(env::Sched, task::TaskIdType) = task in env.stolen
 
-inputs_available(env::Sched, task::TaskIdType) = inputs_available(env, get_executable(env.meta, task))
+inputs_available(env::Sched, task::TaskIdType) = inputs_available(env, get_executable(env, task))
 function inputs_available(env::Sched, executable::Thunk)
     for inp in inputs(executable)
         if istask(inp)
@@ -143,7 +145,7 @@ end
 
 function runnable(env::Sched, task::TaskIdType)
     has_result(env.meta, task) && return true
-    t = get_executable(env.meta, task)
+    t = get_executable(env, task)
     istask(t) ? inputs_available(env, t) : true
 end
 
@@ -192,7 +194,7 @@ function exec(env::Sched, task::TaskIdType)
     has_result(env.meta, task) && (return true)
 
     # run the task
-    t = get_executable(env.meta, task)
+    t = get_executable(env, task)
     if istask(t)
         res = t.f(map(x->_collect(env,x), inputs(t))...)
     elseif isa(t, Function)
@@ -211,10 +213,8 @@ function exec(env::Sched, task::TaskIdType)
             res = chunktodisk(res)
         end
         export_result(env.meta, task, res)
-        del_executable(env.meta, task)
     else
         set_result(env.meta, task, res)
-        _procdel(env.meta, NodeMetaKey(task,M_EXECUTABLE))
     end
 
     # clean up task inputs, we don't need them anymore
@@ -230,4 +230,3 @@ function exec(env::Sched, task::TaskIdType)
 
     true
 end
-
