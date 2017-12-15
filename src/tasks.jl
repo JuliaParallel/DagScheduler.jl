@@ -45,7 +45,7 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Re
         @everywhere Dagger.use_shared_array[] = false
         dref_to_fref(t)
     end
-    info("broker preparation time: $_elapsedtime")
+    #info("broker preparation time: $_elapsedtime")
 
 
     nstolen = 0
@@ -67,7 +67,7 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Re
         end
 
         #tasklog(env, "broker stole $nstolen tasks")
-        info("broker stole $nstolen, shared $(env.nshared[]) tasks")
+        #info("broker stole $nstolen, shared $(env.nshared[]) tasks")
         res = get_result(env.meta, root)
         return isa(res, Chunk) ? collect(res) : res
     catch ex
@@ -161,17 +161,17 @@ function rundag(dag; nexecutors::Int=nworkers(), debug::Bool=false)
     try
         for idx in 1:length(executors)
             executorpath = executors[idx]
-            info("spawning executor $executorpath")
+            #info("spawning executor $executorpath")
             executor_task = @spawnat (idx+1) runexecutor(brokerpath, executorpath, dag, pinger; debug=debug, metastore=metastore, help_threshold=(nexecutors-1))
             push!(executor_tasks, executor_task)
         end
 
-        info("spawning broker")
+        #info("spawning broker")
         res = runbroker(brokerpath, dag, executors, pinger; debug=debug, metastore=metastore)
         while sum(map(isready, executor_tasks)) < length(executor_tasks)
             isready(pinger) && take!(pinger)
         end
-        map(x->info("executor stole $(x[1]), shared $(x[2]) and executed $(x[3])"), executor_tasks)
+        #map(x->info("executor stole $(x[1]), shared $(x[2]) and executed $(x[3])"), executor_tasks)
         res
     finally
         map(SharedDataStructures.delete!, deques)
