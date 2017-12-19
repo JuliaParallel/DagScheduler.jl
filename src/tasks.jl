@@ -81,7 +81,6 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Re
         rethrow(ex)
     finally
         async_reset(env)
-    #    @everywhere MemPool.cleanup()
     end
 end
 
@@ -165,6 +164,7 @@ struct RunEnv
     debug::Bool
 
     function RunEnv(nexecutors::Int=nworkers(), debug::Bool=false)
+        ((nexecutors > 1) || (nworkers() < nexecutors)) || error("need at least two workers")
         executor_tasks = Future[]
         executors = String[]
         deques = SharedCircularDeque{TaskIdType}[]

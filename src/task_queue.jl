@@ -202,31 +202,32 @@ function release(env::Sched, task::TaskIdType, complete::Bool)
     end
 end
 
-_collect(env, x::Chunk) = collect(x)
-function _collect(env, x::Union{Thunk,Function})
+_collect(env, x::Chunk, _c) = collect(x)
+function _collect(env, x::Union{Thunk,Function}, c::Bool=true)
     res = get_result(env.meta, taskid(x))
-    isa(res, Chunk) ? collect(res) : res
+    (isa(res, Chunk) && c) ? collect(res) : res
 end
-_collect(env, x) = x
+_collect(env, x, _c) = x
 function exec(env::Sched, task::TaskIdType)
     has_result(env.meta, task) && (return true)
 
     # run the task
     t = get_executable(env, task)
     if istask(t)
-        res = t.f(map(x->_collect(env,x), inputs(t))...)
+        res = t.f(map(x->_collect(env,x,!t.meta), inputs(t))...)
     elseif isa(t, Function)
         res = t()
     else
         res = t
     end
 
+    if istask(t) && !t.get_result
+        # dagger automatically sets persist and cache flags on dags it generated based on size
+        res = Dagger.tochunk(res, persist = t.persist, cache = t.persist ? true : t.cache)
+    end
+
     # export (if other processes need it) or keep in memory (for use in-process) the result
     if was_stolen(env, task)
-        if !isa(res, Chunk) && istask(t) && !t.get_result
-            # TODO: maybe should do this only if the size is beyond a certain threshold
-            res = Dagger.tochunk(res)
-        end
         if isa(res, Chunk) && isa(res.handle, DRef)
             res = chunktodisk(res)
         end

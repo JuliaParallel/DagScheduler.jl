@@ -15,12 +15,10 @@ runenv = RunEnv()
     info("result = ", result)
     @test result == 1
 
-    #=
-    const dag3 = gen_cross_dag()
-    result = rundag(dag3, nexecutors=nworkers(), debug=false)
-    info("result = ", result)
-    @test result == 84
-    =#
+    #const dag3 = gen_cross_dag()
+    #result = rundag(dag3, nexecutors=nworkers(), debug=false)
+    #info("result = ", result)
+    #@test result == 84
 end
 
 @testset "shallow dag - sorting" begin
@@ -34,7 +32,21 @@ end
         @test issorted(result)
         @test length(result) == L
         @everywhere MemPool.cleanup()
+
+        # for cross dag (TODO: later)
+        #fetched_result = collect(treereduce(delayed(vcat), result))
+        #info("result = ", typeof(result), ", length: ", length(result))
     end
+end
+
+@testset "meta" begin
+    info("Testing meta annotation...")
+    x = [delayed(rand)(10) for i=1:10]
+    y = delayed((c...) -> [c...]; meta=true)(x...)
+    result = rundag(runenv, y)
+    @test isa(result, Vector{<:Dagger.Chunk})
+    @test length(result) == 10
+    @everywhere MemPool.cleanup()
 end
 
 cleanup(runenv)
