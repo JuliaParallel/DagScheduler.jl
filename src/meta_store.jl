@@ -64,13 +64,21 @@ end
 
 close(M::SchedulerNodeMetadata) = close(M.env)
 function delete!(M::SchedulerNodeMetadata)
-    txn = start(M.env)
-    dbi = open(txn)
-    drop(txn, dbi; delete=true)
-    commit(txn)
-    close(M.env, dbi)
+    reset(M; delete=true)
     close(M)
     rm(M.dbpath; recursive=true)
+    nothing
+end
+
+function reset(M::SchedulerNodeMetadata; delete::Bool=false, dropdb::Bool=true)
+    empty!(M.proclocal)
+    if dropdb
+        txn = start(M.env)
+        dbi = open(txn)
+        drop(txn, dbi; delete=delete)
+        commit(txn)
+        close(M.env, dbi)
+    end
     nothing
 end
 

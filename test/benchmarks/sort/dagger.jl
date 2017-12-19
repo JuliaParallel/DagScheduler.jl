@@ -17,6 +17,5 @@ function clean_compute(dag2)
 end
 
 result = clean_compute(dag2);
-@time result = clean_compute(dag2);
-
+#@time result = clean_compute(dag2);
 @btime clean_compute(dag2);

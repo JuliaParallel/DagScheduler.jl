@@ -6,7 +6,7 @@ function runcompare()
 
     for f in F
         command = `$J $f`
-        println("Running $f")
+        println("- $(basename(f))")
         run(command)
     end
 end

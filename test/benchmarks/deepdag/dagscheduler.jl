@@ -5,11 +5,13 @@ using DagScheduler
 using BenchmarkTools
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
+runenv = RunEnv();
 
 const L = 6^4
 const dag2 = gen_straight_dag(ones(Int, L));
 
-result = rundag(dag2, nexecutors=nworkers(), debug=false);
-@time result = rundag(dag2, nexecutors=nworkers(), debug=false);
+result = rundag(runenv, dag2);
+#@time result = rundag(runenv, dag2);
+@btime rundag(runenv, dag2)
 
-@btime rundag(dag2, nexecutors=nworkers(), debug=false);
+cleanup(runenv)

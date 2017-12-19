@@ -11,13 +11,14 @@ struct Sched
     help_threshold::Int                         # threshold for putting out tasks for sharing
     nshared::Ref{Int}                           # cumulative number of tasks shared
     root_task::Ref{Union{Thunk,Void}}           # the root of dag being processed
+    reset_task::Ref{Union{Task,Void}}           # async task to reset the scheduler env after a run
     debug::Bool                                 # switch on debug logging
 
     function Sched(name::String, role::Symbol, pinger::RemoteChannel, metastore::String, help_threshold::Int; share_limit::Int=1024, debug::Bool=false)
         new(hash(name), name, role, pinger,
             SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false),
             Set{TaskIdType}(), Set{TaskIdType}(),
-            help_threshold, Ref(0), Ref{Union{Thunk,Void}}(nothing), debug)
+            help_threshold, Ref(0), Ref{Union{Thunk,Void}}(nothing), Ref{Union{Task,Void}}(nothing), debug)
     end
 end
 
@@ -78,10 +79,27 @@ function has_shared(stack::Union{Sched,SchedPeer}, howmuch::Int)
     end
 end
 
-function reset(env::Sched, task::Thunk)
+function async_reset(env::Sched)
+    env.reset_task[] = @async reset(env)
+    nothing
+end
+
+function reset(env::Sched)
+    reset(env.meta; dropdb=false)
     empty!(env.reserved)
+    empty!(env.shared)
     empty!(env.stolen)
+    empty!(env.expanded)
     env.nshared[] = 0
+    env.root_task[] = nothing
+    nothing
+end
+
+function init(env::Sched, task::Thunk)
+    if env.reset_task[] !== nothing
+        wait(env.reset_task[])
+        env.reset_task[] = nothing
+    end
     env.root_task[] = task
     nothing
 end
@@ -90,13 +108,13 @@ get_executable(env::Sched, task::TaskIdType) = find_task(env.root_task[], task)
 
 keep(env::Sched, executable::Any, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
 function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true, executable::Any=nothing)
-    #tasklog(env, "in keep for task $(task) depth $depth")
+    #tasklog(env, "in keep for task ", task, " depth ", depth)
     has_result(env.meta, task) && (return true)
 
     canreserve = isreserved || cond_set_executor(env.meta, task, env.id, (existing)->((existing == 0) || (existing == env.id)), false)
 
     if canreserve
-        #tasklog(env, "enqueue task $(task) depth $depth")
+        #tasklog(env, "enqueue task ", task, " depth ", depth)
         enqueue(env, task, isreserved)
         !isreserved && (env.role === :executor) && ping(env)
         depth -= 1
@@ -107,7 +125,7 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
                 reservedforself = false
                 for input in inputs(executable)
                     if istask(input)
-                        #tasklog(env, "will keep dependency input for executable $(task)")
+                        #tasklog(env, "will keep dependency input for executable ", task)
                         keep(env, input, depth, isreserved ? (!reservedforself || !should_share(env)) : false)
                         reservedforself = true
                     end
@@ -116,7 +134,7 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
             end
         end
     #else
-    #    tasklog(env, "not enqueing as task is owned by other executor $depth")
+    #    tasklog(env, "not enqueing as task is owned by other executor")
     end
     false
 end

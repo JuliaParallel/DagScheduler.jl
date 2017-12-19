@@ -12,7 +12,7 @@ end
 
 function taskexception(env, ex, bt)
     xret = CapturedException(ex, bt)
-    tasklog(env, "exception $xret")
+    tasklog(env, "exception ", xret)
     @show xret
     xret
 end

@@ -11,7 +11,7 @@ import Dagger: istask, inputs, Chunk
 import LMDB: MDBValue, close
 import Base: delete!
 
-export runbroker, runexecutor, rundag
+export runbroker, runexecutor, rundag, RunEnv, cleanup
 
 include("common.jl")
 include("meta_store.jl")
