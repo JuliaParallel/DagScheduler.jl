@@ -115,32 +115,25 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
     #tasklog(env, "in keep for task ", task, " depth ", depth)
     has_result(env.meta, task) && (return true)
 
-    canreserve = isreserved || cond_set_executor(env.meta, task, env.id, (existing)->((existing == 0) || (existing == env.id)), false)
-
-    if canreserve
-        #tasklog(env, "enqueue task ", task, " depth ", depth)
-        enqueue(env, task, isreserved)
-        !isreserved && (env.role === :executor) && ping(env)
-        depth -= 1
-        if depth >=0
-            (executable == nothing) && (executable = get_executable(env, task))
-            if istask(executable) && !(task in env.expanded)
-                # reserve at least one task
-                reservedforself = false
-                for input in inputs(executable)
-                    if istask(input)
-                        #tasklog(env, "will keep dependency input for executable ", task)
-                        isthisreserved = (isreserved && (length(env.dependents[input]) < 2)) ? (!reservedforself || !should_share(env)) : false
-                        keep(env, input, depth, isthisreserved)
-                        reservedforself = reservedforself || isthisreserved
-                    end
+    #tasklog(env, "enqueue task ", task, " depth ", depth)
+    enqueue(env, task, isreserved)
+    !isreserved && (env.role === :executor) && ping(env)
+    depth -= 1
+    if depth >=0
+        (executable == nothing) && (executable = get_executable(env, task))
+        if istask(executable) && !(task in env.expanded)
+            # reserve at least one task
+            reservedforself = false
+            for input in inputs(executable)
+                if istask(input)
+                    #tasklog(env, "will keep dependency input for executable ", task)
+                    isthisreserved = (isreserved && (length(env.dependents[input]) < 2)) ? (!reservedforself || !should_share(env)) : false
+                    keep(env, input, depth, isthisreserved)
+                    reservedforself = reservedforself || isthisreserved
                 end
-                push!(env.expanded, task)
             end
+            push!(env.expanded, task)
         end
-    else
-        isreserved && tasklog(env, "not enqueing $task as task is owned by other executor")
-        isreserved && println(env.name, " not enqueing $task as task is owned by other executor")
     end
     false
 end
@@ -151,7 +144,6 @@ function steal(env::Sched, from::SchedPeer)
             has_shared(from) || (return NoTask)
             task = shift!(from.shared)
             if !was_stolen(env, task)
-                cond_set_executor(env.meta, task, env.id, (existing)->((existing == 0) || (existing == from.id)), false)
                 push!(env.stolen, task)
                 return task
             end
@@ -211,8 +203,6 @@ function reserve(env::Sched)
     # else get the top task
     (restask === NoTask) && (L > 0) && (restask = data[L])
 
-    # mark the executor
-    #(restask !== NoTask) && cond_set_executor(env.meta, restask, env.id, (existing)->((existing == 0) || (existing == env.id)), false)
     tasklog(env, (restask !== NoTask) ? "reserved $(restask)" : "reserved notask")
     restask
 end
