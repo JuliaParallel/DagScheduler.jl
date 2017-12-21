@@ -3,7 +3,7 @@ const TaskIdType = UInt64
 const NoTask = TaskIdType(0)
 taskid(id::TaskIdType) = id
 taskid(th::Thunk) = TaskIdType(th.id)
-#taskid(ch::Chunk) = TaskIdType(hash(collect(ch)))
+#taskid(ch::Chunk) = TaskIdType(hash(ch))
 #taskid(executable) = TaskIdType(hash(executable))
 
 function tasklog(env, msg...)

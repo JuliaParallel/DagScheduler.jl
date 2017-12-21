@@ -14,6 +14,7 @@
 
 const M_EXECUTOR = UInt8(1)
 const M_RESULT = UInt8(2)
+const M_REFCOUNT = UInt8(3)
 
 struct NodeMetaKey
     id::TaskIdType
@@ -38,7 +39,8 @@ end
 
 const ATTR_PROPS = [
     NodeAttrProp(identity, identity, UInt64),
-    NodeAttrProp(meta_ser, meta_deser, Vector{UInt8})
+    NodeAttrProp(meta_ser, meta_deser, Vector{UInt8}),
+    NodeAttrProp(identity, identity, UInt64)
 ]
 
 struct SchedulerNodeMetadata
@@ -197,6 +199,35 @@ function _cond_set(M::SchedulerNodeMetadata, key::NodeMetaKey, val, cond::Functi
     updated
 end
 
+function decr_resultrefcount(M::SchedulerNodeMetadata, id::TaskIdType)
+    txn = start(M.env)
+    dbi = open(txn)
+    key = NodeMetaKey(id,M_REFCOUNT)
+    reskey = NodeMetaKey(id,M_RESULT)
+    existing = UInt64(0)
+    try
+        fn = ATTR_PROPS[key.attr].get_processor
+        T = ATTR_PROPS[key.attr].get_type
+        existing = fn(get(txn, dbi, askey(key), T))
+        (existing > 0) && (existing -= 1)
+        if existing > 0
+            fn = ATTR_PROPS[key.attr].set_processor
+            put!(txn, dbi, askey(key), fn(existing))
+        else
+            delete!(txn, dbi, askey(key), C_NULL)
+            delete!(txn, dbi, askey(reskey), C_NULL)
+            _prochas(M, key) && _procdel(M, key)
+            _prochas(M, reskey) && _procdel(M, reskey)
+        end
+    catch ex
+        # ignore
+    finally
+        commit(txn)
+        close(M.env, dbi)
+    end
+    existing
+end
+
 has_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_has(M, NodeMetaKey(id,M_RESULT))
 has_executor(M::SchedulerNodeMetadata, id::TaskIdType)                  = _cached_has(M, NodeMetaKey(id,M_EXECUTOR))
 
@@ -209,7 +240,26 @@ get_executor(M::SchedulerNodeMetadata, id::TaskIdType)                  = _get(M
 set_result(M::SchedulerNodeMetadata, id::TaskIdType, val)               = _procset(M, NodeMetaKey(id,M_RESULT), val)
 set_executor(M::SchedulerNodeMetadata, id::TaskIdType, val::UInt64)     = _procset(M, NodeMetaKey(id,M_EXECUTOR), val)
 
-export_result(M::SchedulerNodeMetadata, id::TaskIdType, val)            = _cached_set(M, NodeMetaKey(id,M_RESULT), val)
+function export_result(M::SchedulerNodeMetadata, id::TaskIdType, val, refcount::UInt64)
+    key = NodeMetaKey(id,M_RESULT)
+    refkey = NodeMetaKey(id,M_REFCOUNT)
+    _procset(M, key, val)
+    txn = start(M.env)
+    dbi = open(txn)
+    try
+        fn = ATTR_PROPS[key.attr].set_processor
+        put!(txn, dbi, askey(key), fn(val))
+        reffn = ATTR_PROPS[refkey.attr].set_processor
+        put!(txn, dbi, askey(refkey), reffn(refcount))
+    catch ex
+        rethrow(ex)
+    finally
+        commit(txn)
+        close(M.env, dbi)
+    end
+    nothing
+end
+
 export_executor(M::SchedulerNodeMetadata, id::TaskIdType, val::UInt64)  = _cached_set(M, NodeMetaKey(id,M_EXECUTOR), val)
 
 cond_set_result(M::SchedulerNodeMetadata, id::TaskIdType, val, cond::Function, update_only::Bool)       = _cond_set(M, NodeMetaKey(id,M_RESULT), val, cond, update_only)

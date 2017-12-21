@@ -72,7 +72,7 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Re
             nstolen += steal_from_peers(env, peers)
         end
 
-        #tasklog(env, "broker stole ", nstolen, " tasks")
+        tasklog(env, "broker stole ", nstolen, " tasks")
         #info("broker stole $nstolen, shared $(env.nshared[]) tasks")
         res = get_result(env.meta, root)
         return isa(res, Chunk) ? collect(res) : res
@@ -141,7 +141,7 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
             lasttask = task
         end
         ping(env)
-        #tasklog(env, "executor ", env.name, " stole ", nstolen, ", shared ", env.nshared[], ", completed ", nexecuted, " tasks")
+        tasklog(env, "executor ", env.name, " stole ", nstolen, ", shared ", env.nshared[], ", completed ", nexecuted, " tasks")
     catch ex
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)

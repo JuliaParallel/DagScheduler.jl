@@ -11,6 +11,7 @@ struct Sched
     help_threshold::Int                         # threshold for putting out tasks for sharing
     nshared::Ref{Int}                           # cumulative number of tasks shared
     root_task::Ref{Union{Thunk,Void}}           # the root of dag being processed
+    dependents::Dict{Thunk,Set{Thunk}}          # dependents of each node in the dag being processed
     reset_task::Ref{Union{Task,Void}}           # async task to reset the scheduler env after a run
     debug::Bool                                 # switch on debug logging
 
@@ -18,7 +19,8 @@ struct Sched
         new(hash(name), name, role, pinger,
             SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false),
             Set{TaskIdType}(), Set{TaskIdType}(),
-            help_threshold, Ref(0), Ref{Union{Thunk,Void}}(nothing), Ref{Union{Task,Void}}(nothing), debug)
+            help_threshold, Ref(0), Ref{Union{Thunk,Void}}(nothing), Dict{Thunk,Set{Thunk}}(),
+            Ref{Union{Task,Void}}(nothing), debug)
     end
 end
 
@@ -90,6 +92,7 @@ function reset(env::Sched)
     empty!(env.shared)
     empty!(env.stolen)
     empty!(env.expanded)
+    empty!(env.dependents)
     env.nshared[] = 0
     env.root_task[] = nothing
     nothing
@@ -101,6 +104,7 @@ function init(env::Sched, task::Thunk)
         env.reset_task[] = nothing
     end
     env.root_task[] = task
+    Dagger.dependents(task, env.dependents)
     nothing
 end
 
@@ -126,26 +130,32 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
                 for input in inputs(executable)
                     if istask(input)
                         #tasklog(env, "will keep dependency input for executable ", task)
-                        keep(env, input, depth, isreserved ? (!reservedforself || !should_share(env)) : false)
-                        reservedforself = true
+                        isthisreserved = (isreserved && (length(env.dependents[input]) < 2)) ? (!reservedforself || !should_share(env)) : false
+                        keep(env, input, depth, isthisreserved)
+                        reservedforself = reservedforself || isthisreserved
                     end
                 end
                 push!(env.expanded, task)
             end
         end
-    #else
-    #    tasklog(env, "not enqueing as task is owned by other executor")
+    else
+        isreserved && tasklog(env, "not enqueing $task as task is owned by other executor")
+        isreserved && println(env.name, " not enqueing $task as task is owned by other executor")
     end
     false
 end
 
 function steal(env::Sched, from::SchedPeer)
     withlock(from.shared.lck) do
-        has_shared(from) || (return NoTask)
-        task = shift!(from.shared)
-        cond_set_executor(env.meta, task, env.id, (existing)->((existing == 0) || (existing == from.id)), false)
-        push!(env.stolen, task)
-        return task
+        while true
+            has_shared(from) || (return NoTask)
+            task = shift!(from.shared)
+            if !was_stolen(env, task)
+                cond_set_executor(env.meta, task, env.id, (existing)->((existing == 0) || (existing == from.id)), false)
+                push!(env.stolen, task)
+                return task
+            end
+        end
     end
 end
 
@@ -174,15 +184,28 @@ function reserve(env::Sched)
     #tasklog(env, "reserving from ", join(map(x->string(x.id), data), ", "))
     L = length(data)
 
+    # find an unexpanded task
     restask = NoTask
-
-    # find a runnable task
     for idx in L:-1:1
         task = data[idx]
-        if runnable(env, task)
+        if !(task in env.expanded)
             restask = task
             break
         end
+    end
+
+    # else find a runnable task
+    if restask === NoTask
+        for idx in L:-1:1
+            task = data[idx]
+            if runnable(env, task)
+                restask = task
+                break
+            end
+        end
+        (restask === NoTask) || tasklog(env, " found a runnable task ", restask)
+    else
+        tasklog(env, " found an unexpanded task ", restask)
     end
 
     # else get the top task
@@ -231,21 +254,18 @@ function exec(env::Sched, task::TaskIdType)
         if isa(res, Chunk) && isa(res.handle, DRef)
             res = chunktodisk(res)
         end
-        export_result(env.meta, task, res)
+        export_result(env.meta, task, res, UInt64(length(env.dependents[t])))
     else
         set_result(env.meta, task, res)
     end
 
     # clean up task inputs, we don't need them anymore
     if istask(t)
-        for inp in t.inputs
-            if isa(inp, Chunk) && !inp.persist
-                pooldelete(inp.handle)
-            #elseif istask(inp)
-            #    _procdel(env.meta, NodeMetaKey(task,M_RESULT))
-            end
+        for (inp, ires) in zip(t.inputs, map(x->_collect(env,x,false), inputs(t)))
+            (istask(inp) && isa(ires, Chunk) && !ires.persist) || continue
+            refcount = (length(env.dependents[inp]) > 1) ? decr_resultrefcount(env.meta, taskid(inp)) : UInt64(0)
+            (refcount == 0) && pooldelete(ires.handle)
         end
     end
-
     true
 end
