@@ -10,17 +10,19 @@ struct Sched
     expanded::Set{TaskIdType}                   # tasks that have been expanded (not new tasks)
     help_threshold::Int                         # threshold for putting out tasks for sharing
     nshared::Ref{Int}                           # cumulative number of tasks shared
+    nodeshareqsz::Ref{Int}                      # number of tasks shared in the node (used for help/work first decision)
     root_task::Ref{Union{Thunk,Void}}           # the root of dag being processed
     dependents::Dict{Thunk,Set{Thunk}}          # dependents of each node in the dag being processed
     reset_task::Ref{Union{Task,Void}}           # async task to reset the scheduler env after a run
+    taskidmap::Dict{TaskIdType,Thunk}           # for quick lookup
     debug::Bool                                 # switch on debug logging
 
     function Sched(name::String, role::Symbol, pinger::RemoteChannel, metastore::String, help_threshold::Int; share_limit::Int=1024, debug::Bool=false)
         new(hash(name), name, role, pinger,
             SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false),
             Set{TaskIdType}(), Set{TaskIdType}(),
-            help_threshold, Ref(0), Ref{Union{Thunk,Void}}(nothing), Dict{Thunk,Set{Thunk}}(),
-            Ref{Union{Task,Void}}(nothing), debug)
+            help_threshold, Ref(0), Ref(0), Ref{Union{Thunk,Void}}(nothing), Dict{Thunk,Set{Thunk}}(),
+            Ref{Union{Task,Void}}(nothing), Dict{TaskIdType,Thunk}(), debug)
     end
 end
 
@@ -69,7 +71,7 @@ end
 
 function should_share(stack::Sched)
     withlock(stack.shared.lck) do
-        return (length(stack.shared) < stack.help_threshold)
+        return ((length(stack.shared) + stack.nodeshareqsz[]) < stack.help_threshold)
     end
 end
 
@@ -93,6 +95,7 @@ function reset(env::Sched)
     empty!(env.stolen)
     empty!(env.expanded)
     empty!(env.dependents)
+    empty!(env.taskidmap)
     env.nshared[] = 0
     env.root_task[] = nothing
     nothing
@@ -105,10 +108,11 @@ function init(env::Sched, task::Thunk)
     end
     env.root_task[] = task
     Dagger.dependents(task, env.dependents)
+    walk_dag(task, x->(isa(x, Thunk) && (env.taskidmap[x.id] = x); nothing), false)
     nothing
 end
 
-get_executable(env::Sched, task::TaskIdType) = find_task(env.root_task[], task)
+get_executable(env::Sched, task::TaskIdType) = env.taskidmap[task]
 
 keep(env::Sched, executable::Any, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
 function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true, executable::Any=nothing)
@@ -117,7 +121,7 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
 
     #tasklog(env, "enqueue task ", task, " depth ", depth)
     enqueue(env, task, isreserved)
-    !isreserved && (env.role === :executor) && ping(env)
+    !isreserved && (env.role === :executor) && (env.nodeshareqsz[] < env.help_threshold) && ping(env)
     depth -= 1
     if depth >=0
         (executable == nothing) && (executable = get_executable(env, task))
@@ -215,12 +219,12 @@ function release(env::Sched, task::TaskIdType, complete::Bool)
     end
 end
 
-_collect(env, x::Chunk, _c) = collect(x)
-function _collect(env, x::Union{Thunk,Function}, c::Bool=true)
+_collect(env::Sched, x::Chunk, _c::Bool) = collect(x)
+function _collect(env::Sched, x::Thunk, c::Bool=true)
     res = get_result(env.meta, taskid(x))
     (isa(res, Chunk) && c) ? collect(res) : res
 end
-_collect(env, x, _c) = x
+_collect(env::Sched, x, _c::Bool) = x
 function exec(env::Sched, task::TaskIdType)
     has_result(env.meta, task) && (return true)
 
@@ -228,8 +232,6 @@ function exec(env::Sched, task::TaskIdType)
     t = get_executable(env, task)
     if istask(t)
         res = t.f(map(x->_collect(env,x,!t.meta), inputs(t))...)
-    elseif isa(t, Function)
-        res = t()
     else
         res = t
     end

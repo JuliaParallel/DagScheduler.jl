@@ -1,6 +1,7 @@
 addprocs(5)
 
 include("../../daggen.jl")
+@everywhere Dagger.use_shared_array[] = false
 using DagScheduler
 using BenchmarkTools
 

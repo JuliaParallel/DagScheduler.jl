@@ -14,6 +14,9 @@
 
 const M_RESULT = UInt8(1)
 const M_REFCOUNT = UInt8(2)
+const DONE_TASKS = "tasks.done"
+const DONE_TASKS_SZ = 1024*100
+const MAP_SZ = 1000^3
 
 struct NodeMetaKey
     id::TaskIdType
@@ -45,8 +48,9 @@ struct SchedulerNodeMetadata
     dbpath::String
     env::Environment
     proclocal::Dict{String,Any}
+    donetasks::SharedCircularDeque{TaskIdType}
 
-    function SchedulerNodeMetadata(path::String; ndbs::Int=1, nreaders::Int=1, mapsz::Int=1000^3)
+    function SchedulerNodeMetadata(path::String; ndbs::Int=1, nreaders::Int=1, mapsz::Int=MAP_SZ)
         isdir(path) || mkdir(path)
         env = LMDB.create()
 
@@ -58,11 +62,20 @@ struct SchedulerNodeMetadata
         env[:DBs] = ndbs
 
         open(env, path)
-        new(path, env, Dict{String,Any}())
+        donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(path), DONE_TASKS_SZ; create=false)
+        new(path, env, Dict{String,Any}(), donetasks)
     end
 end
 
-close(M::SchedulerNodeMetadata) = close(M.env)
+donetaskspath(M::SchedulerNodeMetadata) = donetaskspath(M.path)
+donetaskspath(path::String) = joinpath(path, DONE_TASKS)
+
+function close(M::SchedulerNodeMetadata)
+    close(M.env)
+    empty!(M.donetasks)
+    nothing
+end
+
 function delete!(M::SchedulerNodeMetadata)
     reset(M; delete=true)
     close(M)
@@ -79,6 +92,15 @@ function reset(M::SchedulerNodeMetadata; delete::Bool=false, dropdb::Bool=true)
         commit(txn)
         close(M.env, dbi)
     end
+    nothing
+end
+
+function create_metadata_ipc(metastore::String, deques::Vector{SharedCircularDeque{TaskIdType}})
+    donetasks = donetaskspath(metastore)
+    isdir(metastore) && rm(metastore; recursive=true)
+    mkpath(metastore)
+    mkpath(donetasks)
+    push!(deques, SharedCircularDeque{TaskIdType}(donetasks, DONE_TASKS_SZ; create=true))
     nothing
 end
 
@@ -193,7 +215,13 @@ function decr_resultrefcount(M::SchedulerNodeMetadata, id::TaskIdType)
     existing
 end
 
-has_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_has(M, NodeMetaKey(id,M_RESULT))
+function has_result(M::SchedulerNodeMetadata, id::TaskIdType)
+    _prochas(M, NodeMetaKey(id,M_RESULT)) && (return true)
+    #withlock(M.donetasks.lck) do
+        return (id in M.donetasks)
+    #end
+end
+
 del_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_del(M, NodeMetaKey(id,M_RESULT))
 get_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_get(M, NodeMetaKey(id,M_RESULT))
 set_result(M::SchedulerNodeMetadata, id::TaskIdType, val)               = _procset(M, NodeMetaKey(id,M_RESULT), val)
@@ -214,6 +242,9 @@ function export_result(M::SchedulerNodeMetadata, id::TaskIdType, val, refcount::
     finally
         commit(txn)
         close(M.env, dbi)
+    end
+    withlock(M.donetasks.lck) do
+        push!(M.donetasks, id)
     end
     nothing
 end

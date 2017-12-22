@@ -45,8 +45,14 @@ get_frefs(dag) = map(chunktodisk, get_drefs(dag))
 
 chunktodisk(chunk) = Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), chunk.persist)
 
-function walk_dag(dag_node, fn=identity)
-    isa(dag_node, Thunk) && (dag_node.inputs = map(x->walk_dag(x, fn), dag_node.inputs))
+function walk_dag(dag_node, fn=identity, update::Bool=true)
+    if isa(dag_node, Thunk)
+        if update
+            dag_node.inputs = map(x->walk_dag(x, fn, update), dag_node.inputs)
+        else
+            map(x->walk_dag(x, fn, update), dag_node.inputs)
+        end
+    end
     fn(dag_node)
 end
 
@@ -55,7 +61,7 @@ persist_chunks!(dag) = walk_dag(dag, (node) -> begin
         node.persist = true
     end
     node
-end)
+end, true)
 
 dref_to_fref(dag) = dref_to_fref!(deepcopy(dag))
 dref_to_fref!(dag) = walk_dag(dag, (node) -> begin
@@ -64,19 +70,4 @@ dref_to_fref!(dag) = walk_dag(dag, (node) -> begin
     else
         node
     end
-end)
-
-function find_task(dag, task::TaskIdType)
-    if isa(dag, Thunk)
-        if taskid(dag) === task
-            return dag
-        else
-            for inp in dag.inputs
-                match = find_task(inp, task)
-                (match === nothing) && continue
-                return match
-            end
-        end
-    end
-    nothing
-end
+end, true)
