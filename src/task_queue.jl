@@ -43,14 +43,23 @@ function enqueue(stack::Sched, task::TaskIdType, isreserved::Bool)
         enqueue(stack.reserved, task)
     else
         stack.nshared[] += 1
-        enqueue(stack.shared, task)
+        enqueue(stack, stack.shared, task)
     end
 end
-function enqueue(shared::SharedCircularDeque{TaskIdType}, task::TaskIdType)
-    withlock(shared.lck) do
-        (task in shared) || push!(shared, task)
-    end
-    task
+
+const last_sh_sz = Ref(0)
+const FLG_TASK_EXPANDED = TaskIdType(1 << 30)
+function enqueue(stack::Sched, shared::SharedCircularDeque{TaskIdType}, task::TaskIdType)
+    #if task in shared
+    #    NoTask
+    #else
+        masked = (task in stack.expanded) ? (task | FLG_TASK_EXPANDED) : task
+        withlock(shared.lck) do
+            push!(shared, masked)
+            last_sh_sz[] = length(shared)
+        end
+        task
+    #end
 end
 function enqueue(reserved::Vector{TaskIdType}, task::TaskIdType)
     if task in reserved
@@ -71,8 +80,12 @@ end
 
 function should_share(stack::Sched)
     withlock(stack.shared.lck) do
-        return ((length(stack.shared) + stack.nodeshareqsz[]) < stack.help_threshold)
+        return (((length(stack.shared) + stack.nodeshareqsz[]) < stack.help_threshold) || (last_sh_sz[] == 0) || (length(stack.shared) < last_sh_sz[]))
     end
+end
+
+function should_share_reserved(stack::Sched, broker::SchedPeer)
+    (length(stack.reserved) > stack.help_threshold) && !has_shared(stack) && !has_shared(broker)
 end
 
 has_shared(stack::Union{Sched,SchedPeer}) = !isempty(stack.shared)
@@ -146,8 +159,17 @@ function steal(env::Sched, from::SchedPeer)
     withlock(from.shared.lck) do
         while true
             has_shared(from) || (return NoTask)
-            task = shift!(from.shared)
-            if !was_stolen(env, task)
+            task_with_flag = shift!(from.shared)
+            if (task_with_flag & FLG_TASK_EXPANDED) == FLG_TASK_EXPANDED
+                task = TaskIdType(~FLG_TASK_EXPANDED) & task_with_flag
+                push!(env.expanded, task)
+            else
+                task = task_with_flag
+            end
+            # broker does not register the same task twice (to ensure tasks are processed only once)
+            # but executors can pick up the same task multiple times till it is processed
+            if (env.role == :executor) || !was_stolen(env, task)
+                #was_stolen(env, task) && println("stole $task again!")
                 push!(env.stolen, task)
                 return task
             end
@@ -217,6 +239,47 @@ function release(env::Sched, task::TaskIdType, complete::Bool)
     #else
     #    # if task is suspended, dequeue and put it up for stealing
     end
+end
+
+function reserve_to_share(env::Sched)
+    data = env.reserved
+    #tasklog(env, "reserving from ", join(map(x->string(x.id), data), ", "))
+    L = length(data)
+
+    task_to_move = NoTask
+    # find an unexpanded task that's also not stolen
+    for idx in L:-1:1
+        task = data[idx]
+        if !(task in env.expanded) && !(task in env.stolen)
+            task_to_move = task
+            break
+        end
+    end
+
+    # else export first task
+    if task_to_move === NoTask
+        for idx in L:-1:1
+            (data[idx] in env.stolen) && continue
+            task_to_move = data[idx]
+            t = get_executable(env, task_to_move)
+            if istask(t)
+                # export all inputs
+                for inp in t.inputs
+                    if istask(inp)
+                        export_local_result(env.meta, taskid(inp), inp, UInt64(length(env.dependents[inp])))
+                    end
+                end
+            end
+            break
+        end
+    end
+
+    if task_to_move !== NoTask
+        dequeue(env, task_to_move)
+        enqueue(env, task_to_move, false)
+        #println("moved $task_to_move from reserved to shared, expanded: ", (task_to_move in env.expanded), " stolen: ", (task_to_move in env.stolen))
+    end
+    nothing
 end
 
 _collect(env::Sched, x::Chunk, _c::Bool) = collect(x)

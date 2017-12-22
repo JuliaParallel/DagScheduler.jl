@@ -104,11 +104,16 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
         backoff = startbackoff
 
         while !has_result(env.meta, root)
-            nodeshareqsz = env.nodeshareqsz[] = length(broker.shared)
-            #withlock(broker.shared.lck) do
-            #    length(broker.shared)
-            #end
+            nodeshareqsz = env.nodeshareqsz[] = withlock(broker.shared.lck) do
+                length(broker.shared)
+            end
             tasklog(env, "executor trying to do tasks, remaining ", length(env.reserved), ", shared ", length(env.shared), ", shared in node ", nodeshareqsz)
+
+            if should_share_reserved(env, broker)
+                reserve_to_share(env)
+                (nodeshareqsz < help_threshold) && ping(env)
+            end
+
             task = reserve(env)
 
             # if no tasks in own queue, steal tasks from broker

@@ -217,9 +217,9 @@ end
 
 function has_result(M::SchedulerNodeMetadata, id::TaskIdType)
     _prochas(M, NodeMetaKey(id,M_RESULT)) && (return true)
-    #withlock(M.donetasks.lck) do
+    withlock(M.donetasks.lck) do
         return (id in M.donetasks)
-    #end
+    end
 end
 
 del_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_del(M, NodeMetaKey(id,M_RESULT))
@@ -247,4 +247,18 @@ function export_result(M::SchedulerNodeMetadata, id::TaskIdType, val, refcount::
         push!(M.donetasks, id)
     end
     nothing
+end
+
+function export_local_result(M::SchedulerNodeMetadata, id::TaskIdType, t::Thunk, refcount::UInt64)
+    key = NodeMetaKey(id,M_RESULT)
+    (!_prochas(M, key) || (id in M.donetasks)) && return
+    val = _procget(M, key)
+    if !isa(val, Chunk)
+        val = Dagger.tochunk(val, persist = t.persist, cache = t.persist ? true : t.cache)
+    end
+    if isa(val.handle, DRef)
+        val = chunktodisk(val)
+    end
+
+    export_result(M, id, val, refcount)
 end
