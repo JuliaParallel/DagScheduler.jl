@@ -169,7 +169,7 @@ struct RunEnv
     metastore::String
     executor_tasks::Vector{Future}
     deques::Vector{SharedCircularDeque{TaskIdType}}
-    pinger::RemoteChannel{Channel{Any}}
+    pinger::RemoteChannel{Channel{Void}}
     pinger_task::Ref{Union{Task,Void}}
     debug::Bool
 
@@ -178,7 +178,7 @@ struct RunEnv
         executor_tasks = Future[]
         executors = String[]
         deques = SharedCircularDeque{TaskIdType}[]
-        pinger = RemoteChannel()
+        pinger = RemoteChannel(()->Channel{Void}(1024))
 
         runpath = "/dev/shm/jsch$(getpid())"
 
