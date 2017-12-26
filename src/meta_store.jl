@@ -1,19 +1,14 @@
 # scheduler metadata store
 # -------------------------
-# used to share metadata among processes in a node
-# - task executable
-# - task executor
-# - result if execution is complete
+# used to share metadata among processes in a node (result and refcount)
 #
 # layered storage
 # - executors keep intermediate results in process memory till they need to give back the result of a stolen task
-# - results and executables (which are essentially immutable) are cached in process memory too
-#
-# TODO:
-# - reference counting and purging
+# - results are cached in process memory too
+# - also does reference counting and purging
 
-const M_EXECUTOR = UInt8(1)
-const M_RESULT = UInt8(2)
+const M_RESULT = UInt8(1)
+const M_REFCOUNT = UInt8(2)
 
 struct NodeMetaKey
     id::TaskIdType
@@ -37,16 +32,17 @@ function meta_ser(x)
 end
 
 const ATTR_PROPS = [
-    NodeAttrProp(identity, identity, UInt64),
-    NodeAttrProp(meta_ser, meta_deser, Vector{UInt8})
+    NodeAttrProp(meta_ser, meta_deser, Vector{UInt8}),
+    NodeAttrProp(identity, identity, UInt64)
 ]
 
 struct SchedulerNodeMetadata
     dbpath::String
     env::Environment
     proclocal::Dict{String,Any}
+    donetasks::SharedCircularDeque{TaskIdType}
 
-    function SchedulerNodeMetadata(path::String; ndbs::Int=1, nreaders::Int=1, mapsz::Int=1000^3)
+    function SchedulerNodeMetadata(path::String; ndbs::Int=1, nreaders::Int=1, mapsz::Int=MAP_SZ)
         isdir(path) || mkdir(path)
         env = LMDB.create()
 
@@ -58,11 +54,20 @@ struct SchedulerNodeMetadata
         env[:DBs] = ndbs
 
         open(env, path)
-        new(path, env, Dict{String,Any}())
+        donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(path), DONE_TASKS_SZ; create=false)
+        new(path, env, Dict{String,Any}(), donetasks)
     end
 end
 
-close(M::SchedulerNodeMetadata) = close(M.env)
+donetaskspath(M::SchedulerNodeMetadata) = donetaskspath(M.path)
+donetaskspath(path::String) = joinpath(path, DONE_TASKS)
+
+function close(M::SchedulerNodeMetadata)
+    close(M.env)
+    empty!(M.donetasks)
+    nothing
+end
+
 function delete!(M::SchedulerNodeMetadata)
     reset(M; delete=true)
     close(M)
@@ -79,6 +84,15 @@ function reset(M::SchedulerNodeMetadata; delete::Bool=false, dropdb::Bool=true)
         commit(txn)
         close(M.env, dbi)
     end
+    nothing
+end
+
+function create_metadata_ipc(metastore::String, deques::Vector{SharedCircularDeque{TaskIdType}})
+    donetasks = donetaskspath(metastore)
+    isdir(metastore) && rm(metastore; recursive=true)
+    mkpath(metastore)
+    mkpath(donetasks)
+    push!(deques, SharedCircularDeque{TaskIdType}(donetasks, DONE_TASKS_SZ; create=true))
     nothing
 end
 
@@ -164,53 +178,85 @@ function _cached_set(M::SchedulerNodeMetadata, key::NodeMetaKey, val)
     _set(M, key, val)
 end
 
-function _cond_set(M::SchedulerNodeMetadata, key::NodeMetaKey, val, cond::Function, update_only::Bool)
+function decr_resultrefcount(M::SchedulerNodeMetadata, id::TaskIdType)
     txn = start(M.env)
     dbi = open(txn)
-    updated = false
+    key = NodeMetaKey(id,M_REFCOUNT)
+    reskey = NodeMetaKey(id,M_RESULT)
+    existing = UInt64(0)
     try
         fn = ATTR_PROPS[key.attr].get_processor
         T = ATTR_PROPS[key.attr].get_type
         existing = fn(get(txn, dbi, askey(key), T))
-
-        if cond(existing)
-            if existing != val
-                fn = ATTR_PROPS[key.attr].set_processor
-                put!(txn, dbi, askey(key), fn(val))
-            end
-            updated = true
+        (existing > 0) && (existing -= 1)
+        if existing > 0
+            fn = ATTR_PROPS[key.attr].set_processor
+            put!(txn, dbi, askey(key), fn(existing))
+        else
+            delete!(txn, dbi, askey(key), C_NULL)
+            delete!(txn, dbi, askey(reskey), C_NULL)
+            _prochas(M, key) && _procdel(M, key)
+            _prochas(M, reskey) && _procdel(M, reskey)
         end
+    catch ex
+        # ignore
+    finally
         commit(txn)
         close(M.env, dbi)
-        return updated
-    catch ex
-        try
-            fn = ATTR_PROPS[key.attr].set_processor
-            put!(txn, dbi, askey(key), fn(val))
-            updated = true
-        finally
-            commit(txn)
-            close(M.env, dbi)
-        end
     end
-
-    updated
+    existing
 end
 
-has_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_has(M, NodeMetaKey(id,M_RESULT))
-has_executor(M::SchedulerNodeMetadata, id::TaskIdType)                  = _cached_has(M, NodeMetaKey(id,M_EXECUTOR))
+function has_result(M::SchedulerNodeMetadata, id::TaskIdType)
+    _prochas(M, NodeMetaKey(id,M_RESULT)) && (return true)
+    withlock(M.donetasks.lck) do
+        return (id in M.donetasks)
+    end
+end
 
-del_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_del(M, NodeMetaKey(id,M_RESULT))
-del_executor(M::SchedulerNodeMetadata, id::TaskIdType)                  = _cached_del(M, NodeMetaKey(id,M_EXECUTOR))
+del_result(M::SchedulerNodeMetadata, id::TaskIdType)        = _cached_del(M, NodeMetaKey(id,M_RESULT))
+get_result(M::SchedulerNodeMetadata, id::TaskIdType)        = _cached_get(M, NodeMetaKey(id,M_RESULT))
+set_result(M::SchedulerNodeMetadata, id::TaskIdType, val)   = _procset(M, NodeMetaKey(id,M_RESULT), val)
 
-get_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_get(M, NodeMetaKey(id,M_RESULT))
-get_executor(M::SchedulerNodeMetadata, id::TaskIdType)                  = _get(M, NodeMetaKey(id,M_EXECUTOR))::Union{UInt64,Void}
+function export_result(M::SchedulerNodeMetadata, id::TaskIdType, val, refcount::UInt64)
+    key = NodeMetaKey(id,M_RESULT)
+    refkey = NodeMetaKey(id,M_REFCOUNT)
+    _procset(M, key, val)
+    txn = start(M.env)
+    dbi = open(txn)
+    try
+        fn = ATTR_PROPS[key.attr].set_processor
+        put!(txn, dbi, askey(key), fn(val))
+        reffn = ATTR_PROPS[refkey.attr].set_processor
+        put!(txn, dbi, askey(refkey), reffn(refcount))
+    catch ex
+        rethrow(ex)
+    finally
+        commit(txn)
+        close(M.env, dbi)
+    end
+    withlock(M.donetasks.lck) do
+        push!(M.donetasks, id)
+    end
+    nothing
+end
 
-set_result(M::SchedulerNodeMetadata, id::TaskIdType, val)               = _procset(M, NodeMetaKey(id,M_RESULT), val)
-set_executor(M::SchedulerNodeMetadata, id::TaskIdType, val::UInt64)     = _procset(M, NodeMetaKey(id,M_EXECUTOR), val)
+function export_local_result(M::SchedulerNodeMetadata, id::TaskIdType, t::Thunk, refcount::UInt64)
+    key = NodeMetaKey(id,M_RESULT)
 
-export_result(M::SchedulerNodeMetadata, id::TaskIdType, val)            = _cached_set(M, NodeMetaKey(id,M_RESULT), val)
-export_executor(M::SchedulerNodeMetadata, id::TaskIdType, val::UInt64)  = _cached_set(M, NodeMetaKey(id,M_EXECUTOR), val)
+    _prochas(M, key) || return
+    isalreadyexported = withlock(M.donetasks.lck) do
+        id in M.donetasks
+    end
+    isalreadyexported && return
 
-cond_set_result(M::SchedulerNodeMetadata, id::TaskIdType, val, cond::Function, update_only::Bool)       = _cond_set(M, NodeMetaKey(id,M_RESULT), val, cond, update_only)
-cond_set_executor(M::SchedulerNodeMetadata, id::TaskIdType, val, cond::Function, update_only::Bool)     = _cond_set(M, NodeMetaKey(id,M_EXECUTOR), val, cond, update_only)
+    val = _procget(M, key)
+    if !isa(val, Chunk)
+        val = Dagger.tochunk(val, persist = t.persist, cache = t.persist ? true : t.cache)
+    end
+    if isa(val.handle, DRef)
+        val = chunktodisk(val)
+    end
+
+    export_result(M, id, val, refcount)
+end

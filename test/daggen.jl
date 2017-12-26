@@ -61,18 +61,18 @@ end
 
 import Dagger: dsort_chunks
 
-function gen_sort_dag(totalsz=10^6, nchunks=40, batchsize=4)
+function gen_sort_dag(totalsz=10^6, nchunks=40, batchsize=4, nresultchunks=1)
     cs = compute(rand(Blocks(ceil(Int,totalsz/nchunks)), totalsz)).chunks
     lt = Base.isless
     by = identity
     rev = false
     ord = Base.Sort.ord(lt,by,rev,Dagger.default_ord)
 
-    dsort_chunks(cs, 1, batchsize=batchsize, merge=(x,y)->Dagger.merge_sorted(ord, x, y))[1]
-    #=
-    # below generates a cross dag
-    z = dsort_chunks(cs, nchunks, batchsize=batchsize, merge=(x,y)->Dagger.merge_sorted(ord, x, y))
-    foreach(Dagger.persist!, z)
-    delayed((x...)->[x...], meta=true)(z...)
-    =#
+    dag1 = dsort_chunks(cs, nresultchunks, batchsize=batchsize, merge=(x,y)->Dagger.merge_sorted(ord, x, y))
+    if nresultchunks == 1
+        return dag1[1]
+    else
+        foreach(Dagger.persist!, dag1)
+        return delayed((x...)->[x...], meta=true)(dag1...)
+    end
 end

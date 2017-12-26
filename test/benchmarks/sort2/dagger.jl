@@ -8,7 +8,7 @@ using BenchmarkTools
 isdir(".mempool") && rm(".mempool"; recursive=true)
 
 const L = 10^6
-const dag2 = DagScheduler.persist_chunks!(gen_sort_dag(L, 40, 4, 1));
+const dag2 = DagScheduler.persist_chunks!(gen_sort_dag(L, 40, 4, 40));
 
 function clean_compute(dag2)
     result = compute(dag2)

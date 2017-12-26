@@ -1,17 +1,74 @@
+struct RunEnv
+    runpath::String
+    broker::String
+    executors::Vector{String}
+    metastore::String
+    executor_tasks::Vector{Future}
+    deques::Vector{SharedCircularDeque{TaskIdType}}
+    pinger::Pinger
+    pinger_task::Ref{Union{Task,Void}}
+    debug::Bool
+
+    function RunEnv(executor_ids::Vector{Int}=workers(), debug::Bool=false)
+        nexecutors = length(executor_ids)
+        ((nexecutors > 1) || (nworkers() < nexecutors)) || error("need at least two workers")
+        executor_tasks = Future[]
+        executors = String[]
+        deques = SharedCircularDeque{TaskIdType}[]
+        pinger = RemoteChannel(()->Channel{Void}(nexecutors^2))
+
+        runpath = "/dev/shm/jsch$(getpid())"
+
+        # create and initialize the circular deques
+        brokerpath = joinpath(runpath, BROKER_PFX)
+        mkpath(brokerpath)
+        push!(deques, SharedCircularDeque{TaskIdType}(brokerpath, SHAREQ_SZ; create=true))
+        for idx in 1:nexecutors
+            executorpath = joinpath(runpath, "$(EXECUTOR_PFX)$(executor_ids[idx])")
+            mkpath(executorpath)
+            push!(deques, SharedCircularDeque{TaskIdType}(executorpath, SHAREQ_SZ; create=true))
+            push!(executors, executorpath)
+        end
+
+        # create and initialize the shared dict
+        metastore = joinpath(runpath, "scheduler")
+        create_metadata_ipc(metastore, deques)
+
+        @everywhere MemPool.enable_who_has_read[] = false
+        @everywhere Dagger.use_shared_array[] = false
+
+        new(runpath, brokerpath, executors, metastore, executor_tasks, deques, pinger, Ref{Union{Task,Void}}(nothing), debug)
+    end
+end
+
+function wait_for_executors(runenv::RunEnv)
+    tasks = runenv.executor_tasks
+    pinger = runenv.pinger
+    while sum(map(isready, tasks)) < length(tasks)
+        isready(pinger) && take!(pinger)
+    end
+    #map(x->info("executor stole $(x[1]), shared $(x[2]) and executed $(x[3])"), tasks)
+    M = SchedulerNodeMetadata(runenv.metastore)
+    reset(M)
+    close(M)
+    empty!(runenv.executor_tasks)
+    nothing
+end
 ping(env::Sched, event=nothing) = isready(env.pinger) || put!(env.pinger, event)
 
-function do_broking(env::Sched, root)
+function do_broking(env::Sched, root::TaskIdType, maxpings::Int)
     tasklog(env, "broker waiting for ping")
     pinger = env.pinger
     take!(pinger)
-    while isready(pinger)
+    while isready(pinger) && (maxpings > 0)
         take!(pinger)
+        maxpings -= 1
     end
     !has_result(env.meta, root)
 end
 
 function steal_from_peers(env::Sched, peers::Vector{SchedPeer})
-    stealbufsz = length(peers) - 1  # do not steal when there's only one peer!
+    stealbufsz = length(peers)^2
     nstolen = 0
 
     peers = shuffle(peers)
@@ -44,7 +101,7 @@ const startbackoff = 0.001
 # broker provides the initial tasks and coordinates among executors
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
-function runbroker(broker_name::String, t, executors::Vector{String}, pinger::RemoteChannel; metastore::String="/dev/shm/scheduler", debug::Bool=false)
+function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Pinger; metastore::String="/dev/shm/scheduler", debug::Bool=false)
     if genv[] === nothing
         env = genv[] = Sched(broker_name, :broker, pinger, metastore, typemax(Int); debug=debug)
     else
@@ -68,12 +125,12 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Re
         end
 
         # steal tasks from executors and make them available to other executors
-        while do_broking(env, root)
+        while do_broking(env, root, length(executors))
             nstolen += steal_from_peers(env, peers)
         end
 
-        #tasklog(env, "broker stole ", nstolen, " tasks")
-        #info("broker stole $nstolen, shared $(env.nshared[]) tasks")
+        tasklog(env, "broker stole ", nstolen, " shared ", env.nshared, " tasks")
+        #info("broker stole $nstolen, shared $(env.nshared) tasks")
         res = get_result(env.meta, root)
         return isa(res, Chunk) ? collect(res) : res
     catch ex
@@ -84,7 +141,7 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Re
     end
 end
 
-function runexecutor(broker_name::String, executor_name::String, root_t, pinger::RemoteChannel; metastore::String="/dev/shm/scheduler", debug::Bool=false, help_threshold::Int=typemax(Int))
+function runexecutor(broker_name::String, executor_name::String, root_t, pinger::Pinger; metastore::String="/dev/shm/scheduler", debug::Bool=false, help_threshold::Int=typemax(Int))
     if genv[] === nothing
         env = genv[] = Sched(executor_name, :executor, pinger, metastore, help_threshold; debug=debug)
     else
@@ -103,14 +160,23 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
         backoff = startbackoff
 
         while !has_result(env.meta, root)
-            tasklog(env, "executor trying to do tasks, remaining ", length(env.reserved), ", shared ", length(env.shared))
+            env.nodeshareqsz = withlock(broker.shared.lck) do
+                length(broker.shared)
+            end
+            tasklog(env, "executor trying to do tasks, remaining ", length(env.reserved), ", shared ", length(env.shared), ", shared in node ", env.nodeshareqsz)
+
+            if should_share_reserved(env, broker)
+                reserve_to_share(env)
+                (env.nodeshareqsz < help_threshold) && ping(env)
+            end
+
             task = reserve(env)
 
             # if no tasks in own queue, steal tasks from broker
             if task === NoTask || task === lasttask
                 tasklog(env, "got notask or lasttask, will steal")
-                task = steal(env, broker)
-                ping(env)
+                (env.nodeshareqsz > 0) && (task = steal(env, broker))
+                (env.nodeshareqsz < help_threshold) && ping(env)
                 if task === NoTask
                     tasklog(env, "stole notask")
                     backoff = min(maxbackoff, backoff+startbackoff)
@@ -141,7 +207,7 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
             lasttask = task
         end
         ping(env)
-        #tasklog(env, "executor ", env.name, " stole ", nstolen, ", shared ", env.nshared[], ", completed ", nexecuted, " tasks")
+        tasklog(env, "executor ", env.name, " stole ", nstolen, ", shared ", env.nshared, ", completed ", nexecuted, " tasks")
     catch ex
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
@@ -149,63 +215,7 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
         async_reset(env)
     end
     #tasklog(env, "executor done")
-    (nstolen, env.nshared[], nexecuted)
-end
-
-struct RunEnv
-    runpath::String
-    broker::String
-    executors::Vector{String}
-    metastore::String
-    executor_tasks::Vector{Future}
-    deques::Vector{SharedCircularDeque{TaskIdType}}
-    pinger::RemoteChannel{Channel{Any}}
-    pinger_task::Ref{Union{Task,Void}}
-    debug::Bool
-
-    function RunEnv(nexecutors::Int=nworkers(), debug::Bool=false)
-        ((nexecutors > 1) || (nworkers() < nexecutors)) || error("need at least two workers")
-        executor_tasks = Future[]
-        executors = String[]
-        deques = SharedCircularDeque{TaskIdType}[]
-        pinger = RemoteChannel()
-
-        runpath = "/dev/shm"
-        # create and initialize the shared dict
-        metastore = joinpath(runpath, "scheduler")
-        isdir(metastore) && rm(metastore; recursive=true)
-        mkpath(metastore)
-
-        # create and initialize the circular deques
-        brokerpath = joinpath(runpath, "broker")
-        mkpath(brokerpath)
-        push!(deques, SharedCircularDeque{TaskIdType}(brokerpath, 1024; create=true))
-        for idx in 1:nexecutors
-            executorpath = joinpath(runpath, "executor$idx")
-            mkpath(executorpath)
-            push!(deques, SharedCircularDeque{TaskIdType}(executorpath, 1024; create=true))
-            push!(executors, executorpath)
-        end
-
-        @everywhere MemPool.enable_who_has_read[] = false
-        @everywhere Dagger.use_shared_array[] = false
-
-        new(runpath, brokerpath, executors, metastore, executor_tasks, deques, pinger, Ref{Union{Task,Void}}(nothing), debug)
-    end
-end
-
-function wait_for_executors(runenv::RunEnv)
-    tasks = runenv.executor_tasks
-    pinger = runenv.pinger
-    while sum(map(isready, tasks)) < length(tasks)
-        isready(pinger) && take!(pinger)
-    end
-    #map(x->info("executor stole $(x[1]), shared $(x[2]) and executed $(x[3])"), tasks)
-    M = SchedulerNodeMetadata(runenv.metastore)
-    reset(M)
-    close(M)
-    empty!(runenv.executor_tasks)
-    nothing
+    (nstolen, env.nshared, nexecuted)
 end
 
 function cleanup(runenv::RunEnv)
@@ -213,10 +223,13 @@ function cleanup(runenv::RunEnv)
         wait(runenv.pinger_task[])
         runenv.pinger_task[] = nothing
     end
-    map(SharedDataStructures.delete!, runenv.deques)
+    delete!(SchedulerNodeMetadata(runenv.metastore))
+    map(delete!, runenv.deques)
     map(rm, runenv.executors)
-    map((path)->rm(path; recursive=true, force=true), [runenv.metastore, runenv.broker])
+    rm("/dev/shm/jsch$(getpid())"; recursive=true, force=true)
+    #map((path)->rm(path; recursive=true, force=true), [runenv.metastore, runenv.broker])
     map(empty!, (runenv.executors, runenv.executor_tasks, runenv.deques))
+    @everywhere DagScheduler.genv[] = nothing
     nothing
 end
 
@@ -238,8 +251,9 @@ function rundag(runenv::RunEnv, dag::Thunk)
 
     for idx in 1:length(runenv.executors)
         executorpath = runenv.executors[idx]
-        #info("spawning executor $executorpath")
-        executor_task = @spawnat (idx+1) runexecutor(broker, executorpath, dag, pinger; debug=runenv.debug, metastore=metastore, help_threshold=help_threshold)
+        executor_id = parse(Int, basename(executorpath)[(length(EXECUTOR_PFX)+1):end])
+        #info("spawning executor $executorpath on $executor_id")
+        executor_task = @spawnat executor_id runexecutor(broker, executorpath, dag, pinger; debug=runenv.debug, metastore=metastore, help_threshold=help_threshold)
         push!(runenv.executor_tasks, executor_task)
     end
 
