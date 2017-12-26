@@ -1,3 +1,13 @@
+const Pinger = RemoteChannel{Channel{Void}}
+
+const SHAREQ_SZ = 1024             # the max executors per node (1024 is pretty high and safe)
+const DONE_TASKS = "tasks.done"    # file suffix for shm used to store completed tasks
+const DONE_TASKS_SZ = 1024*100     # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))
+const MAP_SZ = 1000^3              # size of shared dict for results and ref counts
+
+const EXECUTOR_PFX = "executor"
+const BROKER_PFX = "broker"
+
 const TaskIdType = UInt64
 
 const NoTask = TaskIdType(0)

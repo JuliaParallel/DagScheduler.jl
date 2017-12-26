@@ -1,22 +1,14 @@
 # scheduler metadata store
 # -------------------------
-# used to share metadata among processes in a node
-# - task executable
-# - task executor
-# - result if execution is complete
+# used to share metadata among processes in a node (result and refcount)
 #
 # layered storage
 # - executors keep intermediate results in process memory till they need to give back the result of a stolen task
-# - results and executables (which are essentially immutable) are cached in process memory too
-#
-# TODO:
-# - reference counting and purging
+# - results are cached in process memory too
+# - also does reference counting and purging
 
 const M_RESULT = UInt8(1)
 const M_REFCOUNT = UInt8(2)
-const DONE_TASKS = "tasks.done"
-const DONE_TASKS_SZ = 1024*100
-const MAP_SZ = 1000^3
 
 struct NodeMetaKey
     id::TaskIdType
@@ -222,9 +214,9 @@ function has_result(M::SchedulerNodeMetadata, id::TaskIdType)
     end
 end
 
-del_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_del(M, NodeMetaKey(id,M_RESULT))
-get_result(M::SchedulerNodeMetadata, id::TaskIdType)                    = _cached_get(M, NodeMetaKey(id,M_RESULT))
-set_result(M::SchedulerNodeMetadata, id::TaskIdType, val)               = _procset(M, NodeMetaKey(id,M_RESULT), val)
+del_result(M::SchedulerNodeMetadata, id::TaskIdType)        = _cached_del(M, NodeMetaKey(id,M_RESULT))
+get_result(M::SchedulerNodeMetadata, id::TaskIdType)        = _cached_get(M, NodeMetaKey(id,M_RESULT))
+set_result(M::SchedulerNodeMetadata, id::TaskIdType, val)   = _procset(M, NodeMetaKey(id,M_RESULT), val)
 
 function export_result(M::SchedulerNodeMetadata, id::TaskIdType, val, refcount::UInt64)
     key = NodeMetaKey(id,M_RESULT)
@@ -251,7 +243,13 @@ end
 
 function export_local_result(M::SchedulerNodeMetadata, id::TaskIdType, t::Thunk, refcount::UInt64)
     key = NodeMetaKey(id,M_RESULT)
-    (!_prochas(M, key) || (id in M.donetasks)) && return
+
+    _prochas(M, key) || return
+    isalreadyexported = withlock(M.donetasks.lck) do
+        id in M.donetasks
+    end
+    isalreadyexported && return
+
     val = _procget(M, key)
     if !isa(val, Chunk)
         val = Dagger.tochunk(val, persist = t.persist, cache = t.persist ? true : t.cache)

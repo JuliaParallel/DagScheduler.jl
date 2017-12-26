@@ -57,5 +57,21 @@ end
 end
 
 cleanup(runenv)
+isdir(".mempool") && rm(".mempool"; recursive=true)
 
+runenv = RunEnv([2,4,6], false)
+
+@testset "selectedworkers" begin
+    x = [delayed(rand)(10) for i=1:10]
+    y = delayed((c...) -> [c...]; meta=true)(x...)
+    result = rundag(runenv, y)
+    @test isa(result, Vector{<:Dagger.Chunk})
+    @test length(result) == 10
+    @everywhere MemPool.cleanup()
+    @test endswith(runenv.executors[1], "executor2")
+    @test endswith(runenv.executors[2], "executor4")
+    @test endswith(runenv.executors[3], "executor6")
+end
+
+cleanup(runenv)
 isdir(".mempool") && rm(".mempool"; recursive=true)
