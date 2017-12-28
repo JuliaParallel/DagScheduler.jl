@@ -1,4 +1,4 @@
-struct RunEnv
+mutable struct RunEnv
     runpath::String
     broker::String
     executors::Vector{String}
@@ -6,7 +6,7 @@ struct RunEnv
     executor_tasks::Vector{Future}
     deques::Vector{SharedCircularDeque{TaskIdType}}
     pinger::Pinger
-    pinger_task::Ref{Union{Task,Void}}
+    pinger_task::Union{Task,Void}
     debug::Bool
 
     function RunEnv(executor_ids::Vector{Int}=workers(), debug::Bool=false)
@@ -37,7 +37,7 @@ struct RunEnv
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
 
-        new(runpath, brokerpath, executors, metastore, executor_tasks, deques, pinger, Ref{Union{Task,Void}}(nothing), debug)
+        new(runpath, brokerpath, executors, metastore, executor_tasks, deques, pinger, nothing, debug)
     end
 end
 
@@ -131,8 +131,7 @@ function runbroker(broker_name::String, t, executors::Vector{String}, pinger::Pi
 
         tasklog(env, "broker stole ", nstolen, " shared ", env.nshared, " tasks")
         #info("broker stole $nstolen, shared $(env.nshared) tasks")
-        res = get_result(env.meta, root)
-        return isa(res, Chunk) ? collect(res) : res
+        return get_result(env.meta, root)
     catch ex
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
@@ -219,9 +218,9 @@ function runexecutor(broker_name::String, executor_name::String, root_t, pinger:
 end
 
 function cleanup(runenv::RunEnv)
-    if nothing !== runenv.pinger_task[]
-        wait(runenv.pinger_task[])
-        runenv.pinger_task[] = nothing
+    if nothing !== runenv.pinger_task
+        wait(runenv.pinger_task)
+        runenv.pinger_task = nothing
     end
     delete!(SchedulerNodeMetadata(runenv.metastore))
     map(delete!, runenv.deques)
@@ -239,9 +238,9 @@ function rundag(runenv::RunEnv, dag::Thunk)
     end
     #info("dag preparation time: $_elapsedtime")
 
-    if nothing !== runenv.pinger_task[]
-        wait(runenv.pinger_task[])
-        runenv.pinger_task[] = nothing
+    if nothing !== runenv.pinger_task
+        wait(runenv.pinger_task)
+        runenv.pinger_task = nothing
     end
 
     metastore = runenv.metastore
@@ -259,6 +258,6 @@ function rundag(runenv::RunEnv, dag::Thunk)
 
     #info("spawning broker")
     res = runbroker(broker, dag, runenv.executors, pinger; debug=runenv.debug, metastore=metastore)
-    runenv.pinger_task[] = @async wait_for_executors(runenv)
+    runenv.pinger_task = @async wait_for_executors(runenv)
     res
 end
