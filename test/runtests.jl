@@ -11,13 +11,13 @@ runenv = RunEnv()
 @testset "deep dag" begin
     info("Testing deep dag...")
     dag1 = gen_straight_dag(ones(Int, 6^4))
-    result = rundag(runenv, dag1)
+    result = collect(rundag(runenv, dag1))
     info("result = ", result)
     @test result == 1
 
     info("Testing cross connected dag...")
     dag3 = gen_cross_dag()
-    result = rundag(runenv, dag3)
+    result = collect(rundag(runenv, dag3))
     info("result = ", result)
     @test result == 84
 end
@@ -27,7 +27,7 @@ end
 
     for L in (10^6, 10^7)
         dag2 = gen_sort_dag(L, 40, 4, 1)
-        result = rundag(runenv, dag2)
+        result = collect(rundag(runenv, dag2))
         info("result = ", typeof(result), ", length: ", length(result), ", sorted: ", issorted(result))
         @test isa(result, Array{Float64,1})
         @test issorted(result)
@@ -36,7 +36,7 @@ end
 
         # for cross dag
         dag4 = gen_sort_dag(L, 40, 4, 40)
-        result = rundag(runenv, dag4)
+        result = collect(rundag(runenv, dag4))
         info("result = ", typeof(result), ", length: ", length(result))
         fullresult = collect(Dagger.treereduce(delayed(vcat), result))
         @test isa(fullresult, Array{Float64,1})
@@ -50,7 +50,7 @@ end
     info("Testing meta annotation...")
     x = [delayed(rand)(10) for i=1:10]
     y = delayed((c...) -> [c...]; meta=true)(x...)
-    result = rundag(runenv, y)
+    result = collect(rundag(runenv, y))
     @test isa(result, Vector{<:Dagger.Chunk})
     @test length(result) == 10
     @everywhere MemPool.cleanup()
@@ -64,7 +64,7 @@ runenv = RunEnv([2,4,6], false)
 @testset "selectedworkers" begin
     x = [delayed(rand)(10) for i=1:10]
     y = delayed((c...) -> [c...]; meta=true)(x...)
-    result = rundag(runenv, y)
+    result = collect(rundag(runenv, y))
     @test isa(result, Vector{<:Dagger.Chunk})
     @test length(result) == 10
     @everywhere MemPool.cleanup()

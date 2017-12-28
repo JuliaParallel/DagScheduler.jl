@@ -274,7 +274,7 @@ function reserve_to_share(env::Sched)
     nothing
 end
 
-_collect(env::Sched, x::Chunk, _c::Bool) = collect(x)
+_collect(env::Sched, x::Chunk, c::Bool) = c ? collect(x) : x
 function _collect(env::Sched, x::Thunk, c::Bool=true)
     res = get_result(env.meta, taskid(x))
     (isa(res, Chunk) && c) ? collect(res) : res
@@ -291,7 +291,7 @@ function exec(env::Sched, task::TaskIdType)
         res = t
     end
 
-    if istask(t) && !t.get_result
+    if istask(t) && !t.get_result && !t.meta
         # dagger automatically sets persist and cache flags on dags it generated based on size
         res = Dagger.tochunk(res, persist = t.persist, cache = t.persist ? true : t.cache)
     end

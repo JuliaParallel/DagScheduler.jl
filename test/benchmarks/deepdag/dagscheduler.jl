@@ -10,8 +10,8 @@ runenv = RunEnv();
 const L = 6^4
 const dag2 = gen_straight_dag(ones(Int, L));
 
-result = rundag(runenv, dag2);
+result = collect(rundag(runenv, dag2));
 #@time result = rundag(runenv, dag2);
-@btime rundag(runenv, dag2)
+@btime collect(rundag(runenv, dag2))
 
 cleanup(runenv)
