@@ -21,7 +21,6 @@ runenv = RunEnv()
     info("result = ", result)
     @test result == 84
 end
-
 @testset "sorting" begin
     info("Testing sorting...")
 
@@ -59,7 +58,7 @@ end
 cleanup(runenv)
 isdir(".mempool") && rm(".mempool"; recursive=true)
 
-runenv = RunEnv([2,4,6], false)
+runenv = RunEnv(; executorids=[2,4,6], debug=false)
 
 @testset "selectedworkers" begin
     x = [delayed(rand)(10) for i=1:10]
@@ -68,9 +67,6 @@ runenv = RunEnv([2,4,6], false)
     @test isa(result, Vector{<:Dagger.Chunk})
     @test length(result) == 10
     @everywhere MemPool.cleanup()
-    @test endswith(runenv.executors[1], "executor2")
-    @test endswith(runenv.executors[2], "executor4")
-    @test endswith(runenv.executors[3], "executor6")
 end
 
 cleanup(runenv)

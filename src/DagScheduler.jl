@@ -4,8 +4,8 @@ module DagScheduler
 using Semaphores
 using SharedDataStructures
 using Dagger
-using LMDB
 using MemPool
+using Etcd
 
 import Dagger: istask, inputs, Chunk
 import LMDB: MDBValue, close
@@ -15,6 +15,7 @@ export runbroker, runexecutor, rundag, RunEnv, cleanup
 
 include("common.jl")
 include("meta_store.jl")
+include("etcd_meta_store.jl")
 include("task_queue.jl")
 include("tasks.jl")
 
