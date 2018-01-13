@@ -12,7 +12,7 @@ mutable struct RunEnv
         ((nexecutors > 1) || (nworkers() < nexecutors)) || error("need at least two workers")
 
         # ensure clean path
-        delete!(EtcdSchedMeta(rootpath, 0))
+        delete!(metastore("DagScheduler.SimpleMeta.SimpleSchedMeta", rootpath, 0))
 
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
@@ -28,7 +28,7 @@ function wait_for_executors(runenv::RunEnv)
     for (pid,task) in runenv.last_task_stat
         isready(task) || wait(task)
     end
-    delete!(EtcdSchedMeta(runenv.rootpath, 0))
+    delete!(metastore("DagScheduler.SimpleMeta.SimpleSchedMeta", runenv.rootpath, 0))
     nothing
 end
 
@@ -152,7 +152,7 @@ function cleanup(runenv::RunEnv)
         wait(runenv.reset_task)
         runenv.reset_task = nothing
     end
-    delete!(EtcdSchedMeta(runenv.rootpath, 0))
+    delete!(metastore("DagScheduler.SimpleMeta.SimpleSchedMeta", runenv.rootpath, 0))
     empty!(runenv.executor_tasks)
     @everywhere DagScheduler.genv[] = nothing
     nothing

@@ -15,8 +15,9 @@ export runbroker, runexecutor, rundag, RunEnv, cleanup
 
 include("common.jl")
 include("meta_store.jl")
-include("etcd_meta_store.jl")
 include("task_queue.jl")
 include("tasks.jl")
+
+include("simple_meta_store.jl")
 
 end # module

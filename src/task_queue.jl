@@ -18,7 +18,7 @@ mutable struct Sched
 
     function Sched(rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
         new(id, brokerid, rootpath, role,
-            EtcdSchedMeta(rootpath, help_threshold),
+            metastore("DagScheduler.SimpleMeta.SimpleSchedMeta", rootpath, help_threshold),
             Vector{TaskIdType}(),
             Set{TaskIdType}(),
             Set{TaskIdType}(),
@@ -119,7 +119,7 @@ end
 
 get_executable(env::Sched, task::TaskIdType) = env.taskidmap[task]
 
-keep(env::Sched, executable::Any, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
+keep(env::Sched, executable::Thunk, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
 function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true, executable::Any=nothing)
     #tasklog(env, "in keep for task ", task, " depth ", depth)
     has_result(env.meta, task) && (return true)
@@ -222,7 +222,7 @@ function reserve(env::Sched)
         tasklog(env, "found an unexpanded task ", restask)
     end
 
-    tasklog(env, "reserved ", (restask !== NoTask) ? restask : "notask")
+    tasklog(env, "reserved ", (restask !== NoTask) ? string(restask) : "notask")
     restask
 end
 
@@ -308,7 +308,7 @@ function exec(env::Sched, task::TaskIdType)
         for (inp, ires) in zip(t.inputs, map(x->_collect(env,x,false), inputs(t)))
             (istask(inp) && isa(ires, Chunk) && !ires.persist) || continue
             refcount = (length(env.dependents[inp]) > 1) ? decr_result_ref(env.meta, taskid(inp)) : UInt64(0)
-            (refcount == 0) && pooldelete(ires.handle)
+            (refcount == 0) && try pooldelete(ires.handle) end
         end
     end
     env.nexecuted += 1
