@@ -18,7 +18,7 @@ mutable struct Sched
 
     function Sched(rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
         new(id, brokerid, rootpath, role,
-            metastore("DagScheduler.SimpleMeta.SimpleSchedMeta", rootpath, help_threshold),
+            metastore(META_IMPL, rootpath, help_threshold),
             Vector{TaskIdType}(),
             Set{TaskIdType}(),
             Set{TaskIdType}(),
@@ -57,7 +57,7 @@ function task_annotation(stack::Sched, task::TaskIdType, addmode::Bool)
 end
 
 function share(stack::Sched, task::TaskIdType)
-    share_task(stack.meta, string(stack.brokerid), task; annotation=(id)->task_annotation(stack, id, true))
+    share_task(stack.meta, string(stack.brokerid), task)
     task
 end
 function enqueue(reserved::Vector{TaskIdType}, task::TaskIdType)
@@ -110,10 +110,9 @@ function init(env::Sched, task::Thunk)
     Dagger.dependents(task, env.dependents)
     walk_dag(task, x->(isa(x, Thunk) && (env.taskidmap[x.id] = x); nothing), false)
 
-    init(env.meta, string(env.brokerid))
-    #wait_root_task(env.meta, taskid(env.dag_root)) # there's a chance that we may miss this notification
-    #track_results(env.meta)
-    #track_shared_tasks(env.meta, string(env.brokerid))
+    init(env.meta, string(env.brokerid);
+        add_annotation=(id)->task_annotation(env, id, true),
+        del_annotation=(id)->task_annotation(env, id, false))
     nothing
 end
 
@@ -164,8 +163,7 @@ function stolen_task_input_watchlist(env::Sched, task::TaskIdType)
 end
 =#
 function steal(env::Sched, from::UInt64=env.brokerid)
-    task = steal_task(env.meta, string(from); annotation=(id)->task_annotation(env, id, false))
-#                        watchlist=(id)->stolen_task_input_watchlist(env, id))
+    task = steal_task(env.meta, string(from))
     if task !== NoTask
         push!(env.stolen, task)
         env.nstolen += 1

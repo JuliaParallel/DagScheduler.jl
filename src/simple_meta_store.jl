@@ -14,13 +14,16 @@ mutable struct SimpleSchedMeta <: SchedMeta
     sharemode::ShareMode
     results_channel::Union{Void,RemoteChannel{Channel{Tuple{String,String}}}}
     gen::Float64
+    add_annotation::Function
+    del_annotation::Function
 
     function SimpleSchedMeta(path::String, sharethreshold::Int)
         new(path, myid(),
             Dict{String,Any}(),
             Set{TaskIdType}(),
             ShareMode(sharethreshold),
-            nothing, time())
+            nothing, time(),
+            identity, identity)
     end
 end
 
@@ -37,8 +40,10 @@ function brokercall(fn, M::SimpleSchedMeta)
     result
 end
 
-function init(M::SimpleSchedMeta, brokerid::String)
+function init(M::SimpleSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity)
     M.brokerid = parse(Int, brokerid)
+    M.add_annotation = add_annotation
+    M.del_annotation = del_annotation
     M.results_channel = brokercall(()->register(RESULTS), M)
     donetasks = brokercall(broker_get_donetasks, M)::Set{TaskIdType}
     union!(M.donetasks, donetasks)
@@ -101,17 +106,20 @@ function reset(M::SimpleSchedMeta)
     empty!(M.proclocal)
     empty!(M.donetasks)
     M.results_channel = nothing
+    M.add_annotation = identity
+    M.del_annotation = identity
+    
     nothing
 end
 
-function share_task(M::SimpleSchedMeta, brokerid::String, id::TaskIdType; annotation=identity)
-    brokercall(()->broker_share_task(id, annotation(id), brokerid), M)
+function share_task(M::SimpleSchedMeta, brokerid::String, id::TaskIdType)
+    brokercall(()->broker_share_task(id, M.add_annotation(id), brokerid), M)
     nothing
 end
 
-function steal_task(M::SimpleSchedMeta, brokerid::String; annotation=identity)
+function steal_task(M::SimpleSchedMeta, brokerid::String)
     taskid = brokercall(()->broker_steal_task(), M)::TaskIdType
-    ((taskid === NoTask) ? taskid : annotation(taskid))::TaskIdType
+    ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 
 function set_result(M::SimpleSchedMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)

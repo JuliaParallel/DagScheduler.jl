@@ -79,12 +79,12 @@ taskpath{T<:SchedMeta}(M::T, brokerid::String) = joinpath(M.path, "broker", brok
 should_share{T<:SchedMeta}(M::T) = should_share(M.sharemode)
 should_share{T<:SchedMeta}(M::T, nreserved::Int) = should_share(M.sharemode, nreserved)
 
-init{T<:SchedMeta}(M::T, brokerid::String) = error("method not implemented for $T")
+init{T<:SchedMeta}(M::T, brokerid::String; add_annotation=identity, del_annotation=identity) = error("method not implemented for $T")
 wait_trigger{T<:SchedMeta}(M::T; timeoutsec::Int=5) = error("method not implemented for $T")
 delete!{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 reset{T<:SchedMeta}(M::T) = error("method not implemented for $T")
-share_task{T<:SchedMeta}(M::T, brokerid::String, id::TaskIdType; annotation=identity) = error("method not implemented for $T")
-steal_task{T<:SchedMeta}(M::T, brokerid::String; annotation=identity) = error("method not implemented for $T")
+share_task{T<:SchedMeta}(M::T, brokerid::String, id::TaskIdType) = error("method not implemented for $T")
+steal_task{T<:SchedMeta}(M::T, brokerid::String) = error("method not implemented for $T")
 set_result{T<:SchedMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
 get_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
 has_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
@@ -104,13 +104,21 @@ metastore(name::String, args...) = (get_type(name))(args...)
 # include the meta implementations
 
 # EtcdMeta - uses Etcd as centralized metadata store
-#module EtcdMeta
-#
-#using Etcd
-#
-#include("etcd_meta_store.jl")
-#
-#end
+module EtcdMeta
+
+using Etcd
+
+import ..DagScheduler
+import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask,
+        take_share_snapshot, should_share, reset, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
+        export_local_result, repurpose_result_to_export
+
+export EtcdSchedMeta
+
+include("etcd_meta_store.jl")
+
+end # module EtcdMeta
 
 # SimpleMeta - uses Julia messaging and remotecalls
 module SimpleMeta
