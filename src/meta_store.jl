@@ -71,6 +71,15 @@ function repurpose_result_to_export(t::Thunk, val)
     val
 end
 
+function brokercall(fn, M)
+    result = remotecall_fetch(fn, M.brokerid)
+    if isa(result, Exception)
+        @show result
+        throw(result)
+    end
+    result
+end
+
 resultroot{T<:SchedMeta}(M::T) = joinpath(M.path, "result")
 resultpath{T<:SchedMeta}(M::T, id::TaskIdType) = joinpath(resultroot(M), string(id))
 sharepath{T<:SchedMeta}(M::T, id::TaskIdType) = joinpath(M.path, "shared", string(id))
@@ -83,6 +92,7 @@ init{T<:SchedMeta}(M::T, brokerid::String; add_annotation=identity, del_annotati
 wait_trigger{T<:SchedMeta}(M::T; timeoutsec::Int=5) = error("method not implemented for $T")
 delete!{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 reset{T<:SchedMeta}(M::T) = error("method not implemented for $T")
+cleanup{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 share_task{T<:SchedMeta}(M::T, brokerid::String, id::TaskIdType) = error("method not implemented for $T")
 steal_task{T<:SchedMeta}(M::T, brokerid::String) = error("method not implemented for $T")
 set_result{T<:SchedMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
@@ -103,6 +113,28 @@ metastore(name::String, args...) = (get_type(name))(args...)
 
 # include the meta implementations
 
+# ShmemMeta - uses shared memory and LMDB as metadata store
+module ShmemMeta
+
+using Semaphores
+using SharedDataStructures
+using LMDB
+import LMDB: MDBValue, close
+
+import ..DagScheduler
+import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask, BcastChannel,
+        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall
+
+export ShmemSchedMeta
+
+const pinger = BcastChannel{Void}()
+
+include("shmem_meta_store.jl")
+
+end # module ShmemMeta
+
 # EtcdMeta - uses Etcd as centralized metadata store
 module EtcdMeta
 
@@ -110,7 +142,7 @@ using Etcd
 
 import ..DagScheduler
 import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask,
-        take_share_snapshot, should_share, reset, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export
 
@@ -126,14 +158,12 @@ module SimpleMeta
 using Base.Threads
 
 import ..DagScheduler
-import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask,
-        take_share_snapshot, should_share, reset, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask, BcastChannel,
+        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
-        export_local_result, repurpose_result_to_export
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall
 
 export SimpleSchedMeta
-
-include("bcast_channel.jl")
 
 const Results = BcastChannel{Tuple{String,String}}
 

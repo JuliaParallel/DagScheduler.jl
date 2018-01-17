@@ -12,7 +12,7 @@ mutable struct RunEnv
         ((nexecutors > 1) || (nworkers() < nexecutors)) || error("need at least two workers")
 
         # ensure clean path
-        delete!(metastore(META_IMPL, rootpath, 0))
+        delete_meta(rootpath)
 
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
@@ -28,7 +28,7 @@ function wait_for_executors(runenv::RunEnv)
     for (pid,task) in runenv.last_task_stat
         isready(task) || wait(task)
     end
-    delete!(metastore(META_IMPL, runenv.rootpath, 0))
+    delete_meta(runenv.rootpath)
     nothing
 end
 
@@ -43,6 +43,20 @@ function print_stats(runenv::RunEnv)
             info("executor $pid: $result")
         end
     end, runenv.last_task_stat)
+    nothing
+end
+
+function delete_meta(rootpath::String)
+    M = metastore(META_IMPL, rootpath, 0)
+    M.brokerid = myid()
+    delete!(M)
+    nothing
+end
+
+function cleanup_meta(rootpath::String)
+    M = metastore(META_IMPL, rootpath, 0)
+    M.brokerid = myid()
+    cleanup(M)
     nothing
 end
 
@@ -152,9 +166,10 @@ function cleanup(runenv::RunEnv)
         wait(runenv.reset_task)
         runenv.reset_task = nothing
     end
-    delete!(metastore(META_IMPL, runenv.rootpath, 0))
+    delete_meta(runenv.rootpath)
     empty!(runenv.executor_tasks)
     @everywhere DagScheduler.genv[] = nothing
+    cleanup_meta(runenv.rootpath)
     nothing
 end
 

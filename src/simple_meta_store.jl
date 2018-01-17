@@ -31,15 +31,6 @@ function Base.show(io::IO, M::SimpleSchedMeta)
     print(io, "SimpleSchedMeta(", M.path, ")")
 end
 
-function brokercall(fn, M::SimpleSchedMeta)
-    result = remotecall_fetch(fn, M.brokerid)
-    if isa(result, Exception)
-        @show result
-        throw(result)
-    end
-    result
-end
-
 function init(M::SimpleSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity)
     M.brokerid = parse(Int, brokerid)
     M.add_annotation = add_annotation
@@ -112,13 +103,16 @@ function reset(M::SimpleSchedMeta)
     nothing
 end
 
+function cleanup(M::SimpleSchedMeta)
+end
+
 function share_task(M::SimpleSchedMeta, brokerid::String, id::TaskIdType)
     brokercall(()->broker_share_task(id, M.add_annotation(id), brokerid), M)
     nothing
 end
 
 function steal_task(M::SimpleSchedMeta, brokerid::String)
-    taskid = brokercall(()->broker_steal_task(), M)::TaskIdType
+    taskid = brokercall(broker_steal_task, M)::TaskIdType
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 

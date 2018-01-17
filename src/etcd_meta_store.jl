@@ -105,6 +105,12 @@ function reset(M::EtcdSchedMeta)
     nothing
 end
 
+function cleanup(M::EtcdSchedMeta)
+    try
+        Etcd.deletedir(M.cli, M.path, recursive=true)
+    end
+end
+
 function share_task(M::EtcdSchedMeta, brokerid::String, id::TaskIdType)
     s = sharepath(M, id)
     last_index = M.start_index
@@ -149,7 +155,8 @@ function _remove_from_tasklist(tasklist::Vector{Pair{String,TaskIdType}}, tpath:
     nothing
 end
 
-function steal_task(M::EtcdSchedMeta, brokerid::String, tasklist::Vector{Pair{String,TaskIdType}}=M.tasklist)
+function steal_task(M::EtcdSchedMeta, brokerid::String)
+    tasklist = M.tasklist
     while !isempty(tasklist)
         tpath, taskid = tasklist[1]
         try
@@ -260,7 +267,7 @@ function get_result(M::EtcdSchedMeta, id::TaskIdType)
     end
 end
 
-function has_result(M::EtcdSchedMeta, id::TaskIdType) #; recheck::Bool=false)
+function has_result(M::EtcdSchedMeta, id::TaskIdType)
     id in M.donetasks
 end
 
