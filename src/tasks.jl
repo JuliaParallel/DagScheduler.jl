@@ -67,14 +67,14 @@ function print_stats(runenv::RunEnv)
 end
 
 function delete_meta(rootpath::String)
-    M = metastore(META_IMPL, rootpath, 0)
+    M = metastore(NODE_META_IMPL, rootpath, 0)
     M.brokerid = myid()
     delete!(M)
     nothing
 end
 
 function cleanup_meta(rootpath::String)
-    M = metastore(META_IMPL, rootpath, 0)
+    M = metastore(NODE_META_IMPL, rootpath, 0)
     M.brokerid = myid()
     cleanup(M)
     nothing
@@ -84,16 +84,24 @@ end
 # per process scheduler context
 #------------------------------------------------------------------
 const genv = Ref{Union{Sched,Void}}(nothing)
+const upstream_genv = Ref{Union{Sched,Void}}(nothing)
 
 #-------------------------------------------------------------------
 # broker provides the initial tasks and coordinates among executors
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
-function runbroker(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
+function runbroker(rootpath::String, id::UInt64, brokerid::UInt64, root_t; upstream_brokerid::UInt64=0, debug::Bool=false, upstream_help_threshold::Int=typemax(Int))
     if genv[] === nothing
-        env = genv[] = Sched(META_IMPL, rootpath, id, brokerid, :broker, typemax(Int); debug=debug)
+        env = genv[] = Sched(NODE_META_IMPL, rootpath, id, brokerid, :broker, typemax(Int); debug=debug)
     else
         env = (genv[])::Sched
+    end
+    if upstream_brokerid > 0
+        if upstream_genv[] === nothing
+            upenv = upstream_genv[] = Sched(CLUSTER_META_IMPL, rootpath, id, upstream_brokerid, :executor, upstream_help_threshold; debug=debug)
+        else
+            upenv = (upstream_genv[])::Sched
+        end
     end
     env.debug = debug
     init(env, root_t)
@@ -125,7 +133,7 @@ end
 #--------------------------------------------------------------------
 function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
     if genv[] === nothing
-        env = genv[] = Sched(META_IMPL, rootpath, id, brokerid, :broker, typemax(Int); debug=debug)
+        env = genv[] = Sched(CLUSTER_META_IMPL, rootpath, id, brokerid, :broker, typemax(Int); debug=debug)
     else
         env = (genv[])::Sched
     end
@@ -155,7 +163,7 @@ end
 
 function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false, help_threshold::Int=typemax(Int))
     if genv[] === nothing
-        env = genv[] = Sched(META_IMPL, rootpath, id, brokerid, :executor, help_threshold; debug=debug)
+        env = genv[] = Sched(NODE_META_IMPL, rootpath, id, brokerid, :executor, help_threshold; debug=debug)
     else
         env = (genv[])::Sched
     end

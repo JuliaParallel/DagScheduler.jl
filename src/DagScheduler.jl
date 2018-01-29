@@ -9,9 +9,13 @@ import Base: delete!
 
 export runmaster, runbroker, runexecutor, rundag, RunEnv, cleanup
 
-#const META_IMPL = "DagScheduler.SimpleMeta.SimpleSchedMeta"
-const META_IMPL = "DagScheduler.ShmemMeta.ShmemSchedMeta"
-#const META_IMPL = "DagScheduler.EtcdMeta.EtcdSchedMeta"
+#const NODE_META_IMPL = "DagScheduler.SimpleMeta.SimpleSchedMeta"
+const NODE_META_IMPL = "DagScheduler.ShmemMeta.ShmemSchedMeta"
+#const NODE_META_IMPL = "DagScheduler.EtcdMeta.EtcdSchedMeta"
+
+#const CLUSTER_META_IMPL = "DagScheduler.SimpleMeta.SimpleSchedMeta"
+const CLUSTER_META_IMPL = "DagScheduler.ShmemMeta.ShmemSchedMeta"
+#const CLUSTER_META_IMPL = "DagScheduler.EtcdMeta.EtcdSchedMeta"
 
 include("common.jl")
 include("bcast_channel.jl")
