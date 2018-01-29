@@ -119,6 +119,40 @@ function runbroker(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug
     end
 end
 
+#-------------------------------------------------------------------
+# broker provides the initial tasks and coordinates among executors
+# by stealing spare tasks from all peers and letting peers steal
+#--------------------------------------------------------------------
+function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
+    if genv[] === nothing
+        env = genv[] = Sched(META_IMPL, rootpath, id, brokerid, :broker, typemax(Int); debug=debug)
+    else
+        env = (genv[])::Sched
+    end
+    env.debug = debug
+    init(env, root_t)
+    tasklog(env, "invoked")
+
+    try
+        task = root = taskid(root_t)
+        keep(env, root_t, 0, false)
+        tasklog(env, "started with ", task)
+
+        while !has_result(env.meta, root)
+            wait_trigger(env.meta)
+        end
+
+        tasklog(env, "stole ", env.nstolen, " shared ", env.nshared, " tasks")
+        #info("broker stole $(env.nstolen), shared $(env.nshared) tasks")
+        return get_result(env.meta, root)
+    catch ex
+        taskexception(env, ex, catch_backtrace())
+        rethrow(ex)
+    finally
+        async_reset(env)
+    end
+end
+
 function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false, help_threshold::Int=typemax(Int))
     if genv[] === nothing
         env = genv[] = Sched(META_IMPL, rootpath, id, brokerid, :executor, help_threshold; debug=debug)
@@ -219,7 +253,7 @@ function rundag(runenv::RunEnv, dag::Thunk)
     end
 
     #info("spawning master broker")
-    res = runbroker(runenv.rootpath, UInt64(myid()), runenv.masterid, dag; debug=runenv.debug)
+    res = runmaster(runenv.rootpath, UInt64(myid()), runenv.masterid, dag; debug=runenv.debug)
 
     runenv.reset_task = @schedule wait_for_executors(runenv)
     res
