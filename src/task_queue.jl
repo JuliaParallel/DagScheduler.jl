@@ -16,9 +16,9 @@ mutable struct Sched
     taskidmap::Dict{TaskIdType,Thunk}           # for quick lookup
     debug::Bool                                 # switch on debug logging
 
-    function Sched(rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
+    function Sched(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
         new(id, brokerid, rootpath, role,
-            metastore(META_IMPL, rootpath, help_threshold),
+            metastore(metastore_impl, rootpath, help_threshold),
             Vector{TaskIdType}(),
             Set{TaskIdType}(),
             Set{TaskIdType}(),

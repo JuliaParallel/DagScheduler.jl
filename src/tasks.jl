@@ -71,7 +71,7 @@ const genv = Ref{Union{Sched,Void}}(nothing)
 #--------------------------------------------------------------------
 function runbroker(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
     if genv[] === nothing
-        env = genv[] = Sched(rootpath, id, brokerid, :broker, typemax(Int); debug=debug)
+        env = genv[] = Sched(META_IMPL, rootpath, id, brokerid, :broker, typemax(Int); debug=debug)
     else
         env = (genv[])::Sched
     end
@@ -101,7 +101,7 @@ end
 
 function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false, help_threshold::Int=typemax(Int))
     if genv[] === nothing
-        env = genv[] = Sched(rootpath, id, brokerid, :executor, help_threshold; debug=debug)
+        env = genv[] = Sched(META_IMPL, rootpath, id, brokerid, :executor, help_threshold; debug=debug)
     else
         env = (genv[])::Sched
     end
