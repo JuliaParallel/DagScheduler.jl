@@ -1,39 +1,29 @@
 mutable struct Sched
     id::UInt64                                  # component id
-    name::String                                # component name
+    brokerid::UInt64                            # broker id
+    rootpath::String                            # root path identifying the run
     role::Symbol                                # :executor or :broker
-    pinger::RemoteChannel                       # signalling channel between peers
-    meta::SchedulerNodeMetadata                 # node level shared metadata store
+    meta::SchedMeta                             # shared metadata store
     reserved::Vector{TaskIdType}                # tasks reserved for this component
-    shared::SharedCircularDeque{TaskIdType}     # tasks put out by this component for sharing
     stolen::Set{TaskIdType}                     # tasks that this component has stolen from others
     expanded::Set{TaskIdType}                   # tasks that have been expanded (not new tasks)
-    help_threshold::Int                         # threshold for putting out tasks for sharing
     nshared::Int                                # cumulative number of tasks shared
-    last_sh_sz::Int                             # size of share queue when last shared, used to track if sharing has been useful (share more if yes, less if no)
-    nodeshareqsz::Int                           # number of tasks shared in the node (used for help/work first decision)
+    nexecuted::Int                              # cumulative number of tasks executed
+    nstolen::Int                                # cumulative number of tasks stolen
     dag_root::Union{Thunk,Void}                 # the root of dag being processed
     dependents::Dict{Thunk,Set{Thunk}}          # dependents of each node in the dag being processed
     reset_task::Union{Task,Void}                # async task to reset the scheduler env after a run
     taskidmap::Dict{TaskIdType,Thunk}           # for quick lookup
     debug::Bool                                 # switch on debug logging
 
-    function Sched(name::String, role::Symbol, pinger::RemoteChannel, metastore::String, help_threshold::Int; share_limit::Int=SHAREQ_SZ, debug::Bool=false)
-        new(hash(name), name, role, pinger,
-            SchedulerNodeMetadata(metastore), Vector{TaskIdType}(), SharedCircularDeque{TaskIdType}(name, share_limit; create=false),
-            Set{TaskIdType}(), Set{TaskIdType}(),
-            help_threshold, 0, 0, 0, nothing, Dict{Thunk,Set{Thunk}}(),
+    function Sched(rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
+        new(id, brokerid, rootpath, role,
+            metastore(META_IMPL, rootpath, help_threshold),
+            Vector{TaskIdType}(),
+            Set{TaskIdType}(),
+            Set{TaskIdType}(),
+            0, 0, 0, nothing, Dict{Thunk,Set{Thunk}}(),
             nothing, Dict{TaskIdType,Thunk}(), debug)
-    end
-end
-
-struct SchedPeer
-    id::UInt64                                  # peer componet id
-    name::String                                # peer name
-    shared::SharedCircularDeque{TaskIdType}     # tasks put out by peer for sharing
-
-    function SchedPeer(name::String; share_limit::Int=SHAREQ_SZ)
-        new(hash(name), name, SharedCircularDeque{TaskIdType}(name, share_limit; create=false))
     end
 end
 
@@ -44,17 +34,30 @@ function enqueue(stack::Sched, task::TaskIdType, isreserved::Bool)
         enqueue(stack.reserved, task)
     else
         stack.nshared += 1
-        enqueue(stack, stack.shared, task)
+        share(stack, task)
     end
 end
 
 const FLG_TASK_EXPANDED = TaskIdType(1 << 30) # we use the lower bits for task id and few higher bits for task state flags
-function enqueue(stack::Sched, shared::SharedCircularDeque{TaskIdType}, task::TaskIdType)
-    masked = (task in stack.expanded) ? (task | FLG_TASK_EXPANDED) : task
-    withlock(shared.lck) do
-        push!(shared, masked)
-        stack.last_sh_sz = length(shared)
+
+function task_annotation(stack::Sched, task::TaskIdType, addmode::Bool)
+    if task !== NoTask
+        if addmode
+            if task in stack.expanded
+                task |= FLG_TASK_EXPANDED
+            end
+        else
+            if (task & FLG_TASK_EXPANDED) == FLG_TASK_EXPANDED
+                task &= TaskIdType(~FLG_TASK_EXPANDED)
+                push!(stack.expanded, task)
+            end
+        end
     end
+    task
+end
+
+function share(stack::Sched, task::TaskIdType)
+    share_task(stack.meta, string(stack.brokerid), task)
     task
 end
 function enqueue(reserved::Vector{TaskIdType}, task::TaskIdType)
@@ -74,63 +77,54 @@ function dequeue(stack::Sched, task::TaskIdType)
     nothing
 end
 
-function should_share(stack::Sched)
-    withlock(stack.shared.lck) do
-        return (((length(stack.shared) + stack.nodeshareqsz) < stack.help_threshold) || (stack.last_sh_sz == 0) || (length(stack.shared) < stack.last_sh_sz))
-    end
-end
-
-function should_share_reserved(stack::Sched, broker::SchedPeer)
-    (length(stack.reserved) > stack.help_threshold) && !has_shared(stack) && !has_shared(broker)
-end
-
-has_shared(stack::Union{Sched,SchedPeer}) = !isempty(stack.shared)
-
-function has_shared(stack::Union{Sched,SchedPeer}, howmuch::Int)
-    withlock(stack.shared.lck) do
-        length(stack.shared) >= howmuch
-    end
-end
+should_share(stack::Sched) = should_share(stack.meta)
+should_share(stack::Sched, nreserved::Int) = should_share(stack.meta, nreserved)
 
 function async_reset(env::Sched)
-    env.reset_task = @async reset(env)
+    env.reset_task = @schedule reset(env)
     nothing
 end
 
 function reset(env::Sched)
-    reset(env.meta; dropdb=false)
+    reset(env.meta)
     empty!(env.reserved)
-    empty!(env.shared)
     empty!(env.stolen)
     empty!(env.expanded)
     empty!(env.dependents)
     empty!(env.taskidmap)
     env.nshared = 0
+    env.nstolen = 0
+    env.nexecuted = 0
     env.dag_root = nothing
     nothing
 end
 
 function init(env::Sched, task::Thunk)
     if env.reset_task !== nothing
-        wait(env.reset_task)
+        try
+            wait(env.reset_task)
+        end
         env.reset_task = nothing
     end
     env.dag_root = task
     Dagger.dependents(task, env.dependents)
     walk_dag(task, x->(isa(x, Thunk) && (env.taskidmap[x.id] = x); nothing), false)
+
+    init(env.meta, string(env.brokerid);
+        add_annotation=(id)->task_annotation(env, id, true),
+        del_annotation=(id)->task_annotation(env, id, false))
     nothing
 end
 
 get_executable(env::Sched, task::TaskIdType) = env.taskidmap[task]
 
-keep(env::Sched, executable::Any, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
+keep(env::Sched, executable::Thunk, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
 function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true, executable::Any=nothing)
     #tasklog(env, "in keep for task ", task, " depth ", depth)
     has_result(env.meta, task) && (return true)
 
-    #tasklog(env, "enqueue task ", task, " depth ", depth)
+    tasklog(env, "enqueue task ", task, " isreserved ", isreserved, " depth ", depth)
     enqueue(env, task, isreserved)
-    !isreserved && (env.role === :executor) && (env.nodeshareqsz < env.help_threshold) && ping(env)
     depth -= 1
     if depth >=0
         (executable == nothing) && (executable = get_executable(env, task))
@@ -151,26 +145,30 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
     false
 end
 
-function steal(env::Sched, from::SchedPeer)
-    withlock(from.shared.lck) do
-        while true
-            has_shared(from) || (return NoTask)
-            task_with_flag = shift!(from.shared)
-            if (task_with_flag & FLG_TASK_EXPANDED) == FLG_TASK_EXPANDED
-                task = TaskIdType(~FLG_TASK_EXPANDED) & task_with_flag
-                push!(env.expanded, task)
-            else
-                task = task_with_flag
-            end
-            # broker does not register the same task twice (to ensure tasks are processed only once)
-            # but executors can pick up the same task multiple times till it is processed
-            if (env.role == :executor) || !was_stolen(env, task)
-                #was_stolen(env, task) && println("stole $task again!")
-                push!(env.stolen, task)
-                return task
+#=
+function stolen_task_input_watchlist(env::Sched, task::TaskIdType)
+    dependents = Vector{TaskIdType}()
+
+    if task in env.expanded
+        executable = get_executable(env, task)
+        for input in inputs(executable)
+            if istask(input)
+                inptask = taskid(input)
+                has_result(env.meta, inptask; recheck=true) || push!(dependents, inptask)
             end
         end
     end
+
+    dependents
+end
+=#
+function steal(env::Sched, from::UInt64=env.brokerid)
+    task = steal_task(env.meta, string(from))
+    if task !== NoTask
+        push!(env.stolen, task)
+        env.nstolen += 1
+    end
+    task
 end
 
 was_stolen(env::Sched, task::TaskIdType) = task in env.stolen
@@ -217,15 +215,12 @@ function reserve(env::Sched)
                 break
             end
         end
-        (restask === NoTask) || tasklog(env, " found a runnable task ", restask)
+        (restask === NoTask) || tasklog(env, "found a runnable task ", restask)
     else
-        tasklog(env, " found an unexpanded task ", restask)
+        tasklog(env, "found an unexpanded task ", restask)
     end
 
-    # else get the top task
-    (restask === NoTask) && (L > 0) && (restask = data[L])
-
-    tasklog(env, "reserved ", (restask !== NoTask) ? restask : "notask")
+    tasklog(env, "reserved ", (restask !== NoTask) ? string(restask) : "notask")
     restask
 end
 
@@ -248,7 +243,7 @@ function reserve_to_share(env::Sched)
         end
     end
 
-    # else export first task
+    # else export first task that's not stolen
     if task_to_move === NoTask
         for idx in L:-1:1
             (data[idx] in env.stolen) && continue
@@ -269,7 +264,7 @@ function reserve_to_share(env::Sched)
     if task_to_move !== NoTask
         dequeue(env, task_to_move)
         enqueue(env, task_to_move, false)
-        #println("moved $task_to_move from reserved to shared, expanded: ", (task_to_move in env.expanded), " stolen: ", (task_to_move in env.stolen))
+        tasklog(env, "moved $task_to_move from reserved to shared, expanded: ", (task_to_move in env.expanded), " stolen: ", (task_to_move in env.stolen))
     end
     nothing
 end
@@ -301,7 +296,7 @@ function exec(env::Sched, task::TaskIdType)
         if isa(res, Chunk) && isa(res.handle, DRef)
             res = chunktodisk(res)
         end
-        export_result(env.meta, task, res, UInt64(length(env.dependents[t])))
+        set_result(env.meta, task, res; refcount=UInt64(length(env.dependents[t])), processlocal=false)
     else
         set_result(env.meta, task, res)
     end
@@ -310,9 +305,10 @@ function exec(env::Sched, task::TaskIdType)
     if istask(t)
         for (inp, ires) in zip(t.inputs, map(x->_collect(env,x,false), inputs(t)))
             (istask(inp) && isa(ires, Chunk) && !ires.persist) || continue
-            refcount = (length(env.dependents[inp]) > 1) ? decr_resultrefcount(env.meta, taskid(inp)) : UInt64(0)
-            (refcount == 0) && pooldelete(ires.handle)
+            refcount = (length(env.dependents[inp]) > 1) ? decr_result_ref(env.meta, taskid(inp)) : UInt64(0)
+            (refcount == 0) && try pooldelete(ires.handle) end
         end
     end
+    env.nexecuted += 1
     true
 end

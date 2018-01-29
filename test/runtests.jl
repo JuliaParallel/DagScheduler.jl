@@ -14,12 +14,14 @@ runenv = RunEnv()
     result = collect(rundag(runenv, dag1))
     info("result = ", result)
     @test result == 1
+    DagScheduler.print_stats(runenv)
 
     info("Testing cross connected dag...")
     dag3 = gen_cross_dag()
     result = collect(rundag(runenv, dag3))
     info("result = ", result)
     @test result == 84
+    DagScheduler.print_stats(runenv)
 end
 
 @testset "sorting" begin
@@ -33,6 +35,7 @@ end
         @test issorted(result)
         @test length(result) == L
         @everywhere MemPool.cleanup()
+        DagScheduler.print_stats(runenv)
 
         # for cross dag
         dag4 = gen_sort_dag(L, 40, 4, 40)
@@ -43,6 +46,7 @@ end
         @test issorted(fullresult)
         @test length(fullresult) == L
         @everywhere MemPool.cleanup()
+        DagScheduler.print_stats(runenv)
     end
 end
 
@@ -54,12 +58,13 @@ end
     @test isa(result, Vector{<:Dagger.Chunk})
     @test length(result) == 10
     @everywhere MemPool.cleanup()
+    DagScheduler.print_stats(runenv)
 end
 
 cleanup(runenv)
 isdir(".mempool") && rm(".mempool"; recursive=true)
 
-runenv = RunEnv([2,4,6], false)
+runenv = RunEnv(; executorids=[2,4,6], debug=false)
 
 @testset "selectedworkers" begin
     x = [delayed(rand)(10) for i=1:10]
@@ -68,9 +73,7 @@ runenv = RunEnv([2,4,6], false)
     @test isa(result, Vector{<:Dagger.Chunk})
     @test length(result) == 10
     @everywhere MemPool.cleanup()
-    @test endswith(runenv.executors[1], "executor2")
-    @test endswith(runenv.executors[2], "executor4")
-    @test endswith(runenv.executors[3], "executor6")
+    DagScheduler.print_stats(runenv)
 end
 
 cleanup(runenv)

@@ -1,262 +1,183 @@
 # scheduler metadata store
 # -------------------------
-# used to share metadata among processes in a node (result and refcount)
-#
-# layered storage
-# - executors keep intermediate results in process memory till they need to give back the result of a stolen task
-# - results are cached in process memory too
-# - also does reference counting and purging
+# Used to share metadata among processes in a node (result and refcount).
+# It would be possible to switch between different implementations of SchedMeta.
 
-const M_RESULT = UInt8(1)
-const M_REFCOUNT = UInt8(2)
+abstract type SchedMeta end
 
-struct NodeMetaKey
-    id::TaskIdType
-    attr::UInt8
+
+"""
+ShareMode holds sharing statistics and determines share-first/help-first mode.
+"""
+mutable struct ShareMode
+    nshared::Int
+    ncreated::Int
+    ndeleted::Int
+    sharesnapshot::Tuple{Int,Int}
+    sharethreshold::Int
+    shouldshare::Bool
+
+    function ShareMode(sharethreshold::Int)
+        new(0, 0, 0, (0,0), sharethreshold, true)
+    end
 end
 
-askey(key::NodeMetaKey) = "$(key.id).$(key.attr)"
-
-struct NodeAttrProp
-    set_processor::Function
-    get_processor::Function
-    get_type::DataType
+function take_share_snapshot(sm::ShareMode)
+    t1 = sm.sharesnapshot
+    t2 = (sm.ncreated, sm.ndeleted)
+    sm.sharesnapshot = t2
+    incr = t2 .- t1
+    incr[1] - incr[2] # residual tasks shared in the interval (>0 => stop sharing more)
 end
 
-meta_deser(v) = meta_deser(convert(Vector{UInt8}, v))
+function should_share(sm::ShareMode)
+    if sm.nshared == 0
+        true
+    elseif sm.nshared <= sm.sharethreshold
+        incr = take_share_snapshot(sm)
+        sm.shouldshare = (incr == 0) ? sm.shouldshare : (incr < 0)
+    else
+        false
+    end
+end
+
+function should_share(sm::ShareMode, nreserved::Int)
+    (nreserved > sm.sharethreshold) && (sm.nshared == 0)
+end
+
+function reset(sm::ShareMode)
+    sm.nshared = sm.ncreated = sm.ndeleted = 0
+    sm.sharesnapshot = (0, 0)
+    sm.shouldshare = true
+    nothing
+end
+
+meta_deser(v) = meta_deser(string(v))
+meta_deser(v::String) = meta_deser(base64decode(v))
 meta_deser(v::Vector{UInt8}) = deserialize(IOBuffer(v))
 function meta_ser(x)
     iob = IOBuffer()
     serialize(iob, x)
-    take!(iob)
+    base64encode(take!(iob))
 end
 
-const ATTR_PROPS = [
-    NodeAttrProp(meta_ser, meta_deser, Vector{UInt8}),
-    NodeAttrProp(identity, identity, UInt64)
-]
-
-struct SchedulerNodeMetadata
-    dbpath::String
-    env::Environment
-    proclocal::Dict{String,Any}
-    donetasks::SharedCircularDeque{TaskIdType}
-
-    function SchedulerNodeMetadata(path::String; ndbs::Int=1, nreaders::Int=1, mapsz::Int=MAP_SZ)
-        isdir(path) || mkdir(path)
-        env = LMDB.create()
-
-        # we want it to be sync, since we are using across processes
-        isflagset(env[:Flags], Cuint(LMDB.NOSYNC)) && unset!(env, LMDB.NOSYNC)
-
-        env[:Readers] = nreaders
-        env[:MapSize] = mapsz
-        env[:DBs] = ndbs
-
-        open(env, path)
-        donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(path), DONE_TASKS_SZ; create=false)
-        new(path, env, Dict{String,Any}(), donetasks)
-    end
-end
-
-donetaskspath(M::SchedulerNodeMetadata) = donetaskspath(M.path)
-donetaskspath(path::String) = joinpath(path, DONE_TASKS)
-
-function close(M::SchedulerNodeMetadata)
-    close(M.env)
-    empty!(M.donetasks)
-    nothing
-end
-
-function delete!(M::SchedulerNodeMetadata)
-    reset(M; delete=true)
-    close(M)
-    rm(M.dbpath; recursive=true)
-    nothing
-end
-
-function reset(M::SchedulerNodeMetadata; delete::Bool=false, dropdb::Bool=true)
-    empty!(M.proclocal)
-    if dropdb
-        txn = start(M.env)
-        dbi = open(txn)
-        drop(txn, dbi; delete=delete)
-        commit(txn)
-        close(M.env, dbi)
-    end
-    nothing
-end
-
-function create_metadata_ipc(metastore::String, deques::Vector{SharedCircularDeque{TaskIdType}})
-    donetasks = donetaskspath(metastore)
-    isdir(metastore) && rm(metastore; recursive=true)
-    mkpath(metastore)
-    mkpath(donetasks)
-    push!(deques, SharedCircularDeque{TaskIdType}(donetasks, DONE_TASKS_SZ; create=true))
-    nothing
-end
-
-_prochas(M::SchedulerNodeMetadata, key::NodeMetaKey) = askey(key) in keys(M.proclocal)
-_procget(M::SchedulerNodeMetadata, key::NodeMetaKey) = get(M.proclocal, askey(key), nothing)
-_procdel(M::SchedulerNodeMetadata, key::NodeMetaKey) = (delete!(M.proclocal, askey(key)); nothing)
-_procset(M::SchedulerNodeMetadata, key::NodeMetaKey, val) = (M.proclocal[askey(key)] = val; nothing)
-
-function _has(M::SchedulerNodeMetadata, key::NodeMetaKey)
-    txn = start(M.env)
-    dbi = open(txn)
-    try
-        get(txn, dbi, askey(key), ATTR_PROPS[key.attr].get_type)
-        return true
-    catch
-        return false
-    finally
-        commit(txn)
-        close(M.env, dbi)
-    end
-end
-
-_cached_has(M::SchedulerNodeMetadata, key::NodeMetaKey) = _prochas(M, key) || _has(M, key)
-
-function _del(M::SchedulerNodeMetadata, key::NodeMetaKey)
-    txn = start(M.env)
-    dbi = open(txn)
-    try
-        delete!(txn, dbi, askey(key), C_NULL)
-    catch ex
-        rethrow(ex)
-    finally
-        commit(txn)
-        close(M.env, dbi)
-    end
-    nothing
-end
-
-function _cached_del(M::SchedulerNodeMetadata, key::NodeMetaKey)
-    _prochas(M, key) && _procdel(M, key)
-    _del(M, key)
-end
-
-function _get(M::SchedulerNodeMetadata, key::NodeMetaKey)
-    txn = start(M.env)
-    dbi = open(txn)
-    try
-        fn = ATTR_PROPS[key.attr].get_processor
-        T = ATTR_PROPS[key.attr].get_type
-        return fn(get(txn, dbi, askey(key), T))
-    catch ex
-        return nothing
-    finally
-        commit(txn)
-        close(M.env, dbi)
-    end
-end
-
-function _cached_get(M::SchedulerNodeMetadata, key::NodeMetaKey)
-    val = _procget(M, key)
-    (val === nothing) && (val = _get(M, key))
-    (val !== nothing) && _procset(M, key, val)
-    val
-end
-
-function _set(M::SchedulerNodeMetadata, key::NodeMetaKey, val)
-    txn = start(M.env)
-    dbi = open(txn)
-    try
-        fn = ATTR_PROPS[key.attr].set_processor
-        put!(txn, dbi, askey(key), fn(val))
-    catch ex
-        rethrow(ex)
-    finally
-        commit(txn)
-        close(M.env, dbi)
-    end
-    nothing
-end
-
-function _cached_set(M::SchedulerNodeMetadata, key::NodeMetaKey, val)
-    _procset(M, key, val)
-    _set(M, key, val)
-end
-
-function decr_resultrefcount(M::SchedulerNodeMetadata, id::TaskIdType)
-    txn = start(M.env)
-    dbi = open(txn)
-    key = NodeMetaKey(id,M_REFCOUNT)
-    reskey = NodeMetaKey(id,M_RESULT)
-    existing = UInt64(0)
-    try
-        fn = ATTR_PROPS[key.attr].get_processor
-        T = ATTR_PROPS[key.attr].get_type
-        existing = fn(get(txn, dbi, askey(key), T))
-        (existing > 0) && (existing -= 1)
-        if existing > 0
-            fn = ATTR_PROPS[key.attr].set_processor
-            put!(txn, dbi, askey(key), fn(existing))
-        else
-            delete!(txn, dbi, askey(key), C_NULL)
-            delete!(txn, dbi, askey(reskey), C_NULL)
-            _prochas(M, key) && _procdel(M, key)
-            _prochas(M, reskey) && _procdel(M, reskey)
-        end
-    catch ex
-        # ignore
-    finally
-        commit(txn)
-        close(M.env, dbi)
-    end
-    existing
-end
-
-function has_result(M::SchedulerNodeMetadata, id::TaskIdType)
-    _prochas(M, NodeMetaKey(id,M_RESULT)) && (return true)
-    withlock(M.donetasks.lck) do
-        return (id in M.donetasks)
-    end
-end
-
-del_result(M::SchedulerNodeMetadata, id::TaskIdType)        = _cached_del(M, NodeMetaKey(id,M_RESULT))
-get_result(M::SchedulerNodeMetadata, id::TaskIdType)        = _cached_get(M, NodeMetaKey(id,M_RESULT))
-set_result(M::SchedulerNodeMetadata, id::TaskIdType, val)   = _procset(M, NodeMetaKey(id,M_RESULT), val)
-
-function export_result(M::SchedulerNodeMetadata, id::TaskIdType, val, refcount::UInt64)
-    key = NodeMetaKey(id,M_RESULT)
-    refkey = NodeMetaKey(id,M_REFCOUNT)
-    _procset(M, key, val)
-    txn = start(M.env)
-    dbi = open(txn)
-    try
-        fn = ATTR_PROPS[key.attr].set_processor
-        put!(txn, dbi, askey(key), fn(val))
-        reffn = ATTR_PROPS[refkey.attr].set_processor
-        put!(txn, dbi, askey(refkey), reffn(refcount))
-    catch ex
-        rethrow(ex)
-    finally
-        commit(txn)
-        close(M.env, dbi)
-    end
-    withlock(M.donetasks.lck) do
-        push!(M.donetasks, id)
-    end
-    nothing
-end
-
-function export_local_result(M::SchedulerNodeMetadata, id::TaskIdType, t::Thunk, refcount::UInt64)
-    key = NodeMetaKey(id,M_RESULT)
-
-    _prochas(M, key) || return
-    isalreadyexported = withlock(M.donetasks.lck) do
-        id in M.donetasks
-    end
-    isalreadyexported && return
-
-    val = _procget(M, key)
+function repurpose_result_to_export(t::Thunk, val)
     if !isa(val, Chunk)
         val = Dagger.tochunk(val, persist = t.persist, cache = t.persist ? true : t.cache)
     end
     if isa(val.handle, DRef)
         val = chunktodisk(val)
     end
-
-    export_result(M, id, val, refcount)
+    val
 end
+
+function brokercall(fn, M)
+    result = remotecall_fetch(fn, M.brokerid)
+    if isa(result, Exception)
+        @show result
+        throw(result)
+    end
+    result
+end
+
+resultroot{T<:SchedMeta}(M::T) = joinpath(M.path, "result")
+resultpath{T<:SchedMeta}(M::T, id::TaskIdType) = joinpath(resultroot(M), string(id))
+sharepath{T<:SchedMeta}(M::T, id::TaskIdType) = joinpath(M.path, "shared", string(id))
+taskpath{T<:SchedMeta}(M::T, brokerid::String) = joinpath(M.path, "broker", brokerid)
+
+should_share{T<:SchedMeta}(M::T) = should_share(M.sharemode)
+should_share{T<:SchedMeta}(M::T, nreserved::Int) = should_share(M.sharemode, nreserved)
+
+init{T<:SchedMeta}(M::T, brokerid::String; add_annotation=identity, del_annotation=identity) = error("method not implemented for $T")
+wait_trigger{T<:SchedMeta}(M::T; timeoutsec::Int=5) = error("method not implemented for $T")
+delete!{T<:SchedMeta}(M::T) = error("method not implemented for $T")
+reset{T<:SchedMeta}(M::T) = error("method not implemented for $T")
+cleanup{T<:SchedMeta}(M::T) = error("method not implemented for $T")
+share_task{T<:SchedMeta}(M::T, brokerid::String, id::TaskIdType) = error("method not implemented for $T")
+steal_task{T<:SchedMeta}(M::T, brokerid::String) = error("method not implemented for $T")
+set_result{T<:SchedMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
+get_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
+has_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
+decr_result_ref{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
+export_local_result{T<:SchedMeta}(M::T, id::TaskIdType, executable, refcount::UInt64) = error("method not implemented for $T")
+
+function get_type(s::String)
+    T = Main
+    for t in split(s, ".")
+        T = eval(T, Symbol(t))
+    end
+    T
+end
+
+metastore(name::String, args...) = (get_type(name))(args...)
+
+# include the meta implementations
+
+# ShmemMeta - uses shared memory and LMDB as metadata store
+module ShmemMeta
+
+using Semaphores
+using SharedDataStructures
+using LMDB
+import LMDB: MDBValue, close
+
+import ..DagScheduler
+import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask, BcastChannel,
+        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall
+
+export ShmemSchedMeta
+
+const pinger = BcastChannel{Void}()
+
+include("shmem_meta_store.jl")
+
+end # module ShmemMeta
+
+# EtcdMeta - uses Etcd as centralized metadata store
+module EtcdMeta
+
+using Etcd
+
+import ..DagScheduler
+import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask,
+        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
+        export_local_result, repurpose_result_to_export
+
+export EtcdSchedMeta
+
+include("etcd_meta_store.jl")
+
+end # module EtcdMeta
+
+# SimpleMeta - uses Julia messaging and remotecalls
+module SimpleMeta
+
+using Base.Threads
+
+import ..DagScheduler
+import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask, BcastChannel,
+        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall
+
+export SimpleSchedMeta
+
+const Results = BcastChannel{Tuple{String,String}}
+
+const META = Dict{String,String}()
+const TASKS = Ref(Channel{TaskIdType}(1024))
+const RESULTS = Results()
+const taskmutex = Ref(Mutex())
+
+include("simple_meta_store.jl")
+
+function __init__()
+    TASKS[] = Channel{TaskIdType}(1024)
+    taskmutex[] = Mutex()
+    nothing
+end
+
+end # module SimpleMeta
