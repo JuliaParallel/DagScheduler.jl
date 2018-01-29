@@ -1,13 +1,23 @@
-mutable struct RunEnv
-    rootpath::String
+mutable struct NodeEnv
     brokerid::UInt64
     executorids::Vector{UInt64}
     executor_tasks::Vector{Future}
     last_task_stat::Vector{Tuple{UInt64,Future}}
     reset_task::Union{Task,Void}
+
+    function NodeEnv(brokerid::Integer, executorids::Vector{Int})
+        new(brokerid, executorids, Vector{Future}(), Vector{Tuple{UInt64,Future}}(), nothing)
+    end
+end
+
+mutable struct RunEnv
+    rootpath::String
+    masterid::UInt64
+    nodes::Vector{NodeEnv}
+    reset_task::Union{Task,Void}
     debug::Bool
 
-    function RunEnv(; rootpath::String="/dagscheduler", brokerid::Int=myid(), executorids::Vector{Int}=workers(), debug::Bool=false)
+    function RunEnv(; rootpath::String="/dagscheduler", masterid::Int=myid(), executorids::Vector{Int}=workers(), debug::Bool=false)
         nexecutors = length(executorids)
         ((nexecutors > 1) || (nworkers() < nexecutors)) || error("need at least two workers")
 
@@ -17,32 +27,42 @@ mutable struct RunEnv
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
 
-        new(rootpath, brokerid, executorids, Vector{Future}(), Vector{Tuple{UInt64,Future}}(), nothing, debug)
+        node = NodeEnv(masterid, executorids)
+
+        new(rootpath, masterid, [node], nothing, debug)
     end
 end
 
 function wait_for_executors(runenv::RunEnv)
-    empty!(runenv.last_task_stat)
-    append!(runenv.last_task_stat, zip(runenv.executorids, runenv.executor_tasks))
-    empty!(runenv.executor_tasks)
-    for (pid,task) in runenv.last_task_stat
-        isready(task) || wait(task)
+    @sync for node in runenv.nodes
+        @async begin
+            empty!(node.last_task_stat)
+            append!(node.last_task_stat, zip(node.executorids, node.executor_tasks))
+            empty!(node.executor_tasks)
+            for (pid,task) in node.last_task_stat
+                isready(task) || wait(task)
+            end
+        end
     end
+    # TODO: execute delete_meta on brokers for broker env cleanup
     delete_meta(runenv.rootpath)
     nothing
 end
 
 function print_stats(runenv::RunEnv)
-    map((x)->begin
-        pid = x[1]
-        result = fetch(x[2])
-        if isa(result, Tuple)
-            stole, shared, executed = fetch(x[2])
-            info("executor $pid stole $stole, shared $shared, executed $executed tasks") 
-        else
-            info("executor $pid: $result")
-        end
-    end, runenv.last_task_stat)
+    for node in runenv.nodes
+        info("broker $(node.brokerid)")
+        map((x)->begin
+            pid = x[1]
+            result = fetch(x[2])
+            if isa(result, Tuple)
+                stole, shared, executed = fetch(x[2])
+                info("executor $pid stole $stole, shared $shared, executed $executed tasks") 
+            else
+                info("executor $pid: $result")
+            end
+        end, node.last_task_stat)
+    end
     nothing
 end
 
@@ -167,9 +187,12 @@ function cleanup(runenv::RunEnv)
         runenv.reset_task = nothing
     end
     delete_meta(runenv.rootpath)
-    empty!(runenv.executor_tasks)
+    for node in runenv.nodes
+        empty!(node.executor_tasks)
+    end
     @everywhere DagScheduler.genv[] = nothing
     cleanup_meta(runenv.rootpath)
+    # TODO: spawn remote tasks on brokers to cleanup meta on brokers
     nothing
 end
 
@@ -184,17 +207,20 @@ function rundag(runenv::RunEnv, dag::Thunk)
         runenv.reset_task = nothing
     end
 
-    help_threshold = length(runenv.executorids) - 1
+    for node in runenv.nodes
+        help_threshold = length(node.executorids) - 1
 
-    for idx in 1:length(runenv.executorids)
-        executorid = runenv.executorids[idx]
-        #info("spawning executor $executorid")
-        executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, runenv.brokerid, dag; debug=runenv.debug, help_threshold=help_threshold)
-        push!(runenv.executor_tasks, executor_task)
+        for idx in 1:length(node.executorids)
+            executorid = node.executorids[idx]
+            #info("spawning executor $executorid")
+            executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, runenv.masterid, dag; debug=runenv.debug, help_threshold=help_threshold)
+            push!(node.executor_tasks, executor_task)
+        end
     end
 
-    #info("spawning broker")
-    res = runbroker(runenv.rootpath, UInt64(myid()), runenv.brokerid, dag; debug=runenv.debug)
+    #info("spawning master broker")
+    res = runbroker(runenv.rootpath, UInt64(myid()), runenv.masterid, dag; debug=runenv.debug)
+
     runenv.reset_task = @schedule wait_for_executors(runenv)
     res
 end
