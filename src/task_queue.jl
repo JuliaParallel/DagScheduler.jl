@@ -134,7 +134,8 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
             for input in inputs(executable)
                 if istask(input)
                     #tasklog(env, "will keep dependency input for executable ", task)
-                    isthisreserved = (isreserved && (length(env.dependents[input]) < 2)) ? (!reservedforself || !should_share(env)) : false
+                    nocrossdeps = (length(env.dependents[input]) < 2)
+                    isthisreserved = (isreserved && nocrossdeps) ? (!reservedforself || !should_share(env)) : false
                     keep(env, input, depth, isthisreserved)
                     reservedforself = reservedforself || isthisreserved
                 end
