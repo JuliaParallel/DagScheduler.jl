@@ -18,6 +18,7 @@ mutable struct EtcdSchedMeta <: SchedMeta
     trigger::Channel{Void}
     add_annotation::Function
     del_annotation::Function
+    result_callback::Union{Function,Void}
 
     function EtcdSchedMeta(path::String, sharethreshold::Int)
         server = "127.0.0.1"
@@ -34,7 +35,7 @@ mutable struct EtcdSchedMeta <: SchedMeta
             Set{TaskIdType}(),
             ShareMode(sharethreshold),
             Channel{Void}(1024),
-            identity, identity)
+            identity, identity, nothing)
     end
 end
 
@@ -42,10 +43,11 @@ function Base.show(io::IO, M::EtcdSchedMeta)
     print(io, "EtcdSchedMeta(", M.path, ")")
 end
 
-function init(M::EtcdSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity)
+function init(M::EtcdSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.start_index = _determine_start_index(M.cli, M.path)
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
+    M.result_callback = result_callback
     _track_results(M)
     _track_shared_tasks(M, brokerid)
     nothing
@@ -99,6 +101,7 @@ function reset(M::EtcdSchedMeta)
     empty!(M.sharedtasks)
     M.add_annotation = identity
     M.del_annotation = identity
+    M.result_callback = nothing
     while isready(M.trigger)
         take!(M.trigger)
     end
@@ -205,6 +208,9 @@ function _track_results(M::EtcdSchedMeta; wait_index::Int=(M.start_index+1))
             key = resp["node"]["key"]
             id = parse(TaskIdType, basename(key))
             set_result(M, id, val)
+            if M.result_callback !== nothing
+                M.result_callback(id, val)
+            end
             isready(M.trigger) || put!(M.trigger, nothing)
         end
     end

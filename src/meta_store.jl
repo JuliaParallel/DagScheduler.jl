@@ -88,7 +88,7 @@ taskpath{T<:SchedMeta}(M::T, brokerid::String) = joinpath(M.path, "broker", brok
 should_share{T<:SchedMeta}(M::T) = should_share(M.sharemode)
 should_share{T<:SchedMeta}(M::T, nreserved::Int) = should_share(M.sharemode, nreserved)
 
-init{T<:SchedMeta}(M::T, brokerid::String; add_annotation=identity, del_annotation=identity) = error("method not implemented for $T")
+init{T<:SchedMeta}(M::T, brokerid::String; add_annotation=identity, del_annotation=identity, result_callback=nothing) = error("method not implemented for $T")
 wait_trigger{T<:SchedMeta}(M::T; timeoutsec::Int=5) = error("method not implemented for $T")
 delete!{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 reset{T<:SchedMeta}(M::T) = error("method not implemented for $T")

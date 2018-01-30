@@ -16,6 +16,7 @@ mutable struct SimpleSchedMeta <: SchedMeta
     gen::Float64
     add_annotation::Function
     del_annotation::Function
+    result_callback::Union{Function,Void}
 
     function SimpleSchedMeta(path::String, sharethreshold::Int)
         new(path, myid(),
@@ -23,7 +24,7 @@ mutable struct SimpleSchedMeta <: SchedMeta
             Set{TaskIdType}(),
             ShareMode(sharethreshold),
             nothing, time(),
-            identity, identity)
+            identity, identity, nothing)
     end
 end
 
@@ -31,10 +32,11 @@ function Base.show(io::IO, M::SimpleSchedMeta)
     print(io, "SimpleSchedMeta(", M.path, ")")
 end
 
-function init(M::SimpleSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity)
+function init(M::SimpleSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.brokerid = parse(Int, brokerid)
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
+    M.result_callback = result_callback
     M.results_channel = brokercall(()->register(RESULTS), M)
     donetasks = brokercall(broker_get_donetasks, M)::Set{TaskIdType}
     union!(M.donetasks, donetasks)
@@ -54,6 +56,9 @@ function process_trigger(M::SimpleSchedMeta, k::String, v::String)
         M.proclocal[k] = val
         id = parse(TaskIdType, basename(k))
         push!(M.donetasks, id)
+        if M.result_callback !== nothing
+            M.result_callback(id, val)
+        end
     end
     nothing
 end
@@ -99,6 +104,7 @@ function reset(M::SimpleSchedMeta)
     M.results_channel = nothing
     M.add_annotation = identity
     M.del_annotation = identity
+    M.result_callback = nothing
     
     nothing
 end

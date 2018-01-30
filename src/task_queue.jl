@@ -99,7 +99,7 @@ function reset(env::Sched)
     nothing
 end
 
-function init(env::Sched, task::Thunk)
+function init(env::Sched, task::Thunk; result_callback=nothing)
     if env.reset_task !== nothing
         try
             wait(env.reset_task)
@@ -112,7 +112,8 @@ function init(env::Sched, task::Thunk)
 
     init(env.meta, string(env.brokerid);
         add_annotation=(id)->task_annotation(env, id, true),
-        del_annotation=(id)->task_annotation(env, id, false))
+        del_annotation=(id)->task_annotation(env, id, false),
+        result_callback=result_callback)
     nothing
 end
 
