@@ -8,6 +8,7 @@ mutable struct EtcdSchedMeta <: SchedMeta
     server::String
     port::UInt
     cli::Etcd.Client
+    brokerid::Int
     start_index::Int
     proclocal::Dict{String,Any}
     watches::Dict{String,Task}
@@ -27,7 +28,7 @@ mutable struct EtcdSchedMeta <: SchedMeta
         cli = Etcd.connect(server, Int(port), "v2")
         start_index = _determine_start_index(cli, path)
 
-        new(path, server, port, cli, start_index,
+        new(path, server, port, cli, myid(), start_index,
             Dict{String,Any}(),
             Dict{String,Task}(),
             Vector{Pair{String,TaskIdType}}(),
@@ -43,13 +44,14 @@ function Base.show(io::IO, M::EtcdSchedMeta)
     print(io, "EtcdSchedMeta(", M.path, ")")
 end
 
-function init(M::EtcdSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity, result_callback=nothing)
+function init(M::EtcdSchedMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
+    M.brokerid = brokerid
     M.start_index = _determine_start_index(M.cli, M.path)
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
     M.result_callback = result_callback
     _track_results(M)
-    _track_shared_tasks(M, brokerid)
+    _track_shared_tasks(M)
     nothing
 end
 
@@ -114,7 +116,7 @@ function cleanup(M::EtcdSchedMeta)
     end
 end
 
-function share_task(M::EtcdSchedMeta, brokerid::String, id::TaskIdType, allow_dup::Bool)
+function share_task(M::EtcdSchedMeta, id::TaskIdType, allow_dup::Bool)
     s = sharepath(M, id)
     last_index = M.start_index
 
@@ -130,15 +132,15 @@ function share_task(M::EtcdSchedMeta, brokerid::String, id::TaskIdType, allow_du
 
     if canshare
         annotated = M.add_annotation(id)
-        k = taskpath(M, brokerid)
+        k = taskpath(M)
         set(M.cli, k, string(annotated); ordered=true)
     end
 
     nothing
 end
 
-function _get_shared_tasks(M::EtcdSchedMeta, brokerid::String)
-    k = taskpath(M, brokerid)
+function _get_shared_tasks(M::EtcdSchedMeta)
+    k = taskpath(M)
     last_index = M.start_index
     res = Vector{Pair{String,TaskIdType}}()
 
@@ -166,7 +168,7 @@ function _remove_from_tasklist(tasklist::Vector{Pair{String,TaskIdType}}, tpath:
     nothing
 end
 
-function steal_task(M::EtcdSchedMeta, brokerid::String)
+function steal_task(M::EtcdSchedMeta)
     tasklist = M.tasklist
     while !isempty(tasklist)
         tpath, taskid = tasklist[1]
@@ -191,9 +193,9 @@ function _watchloop_end_cond(M::EtcdSchedMeta, resp)
     (resp["action"] == "delete") && (resp["node"]["key"] == M.path)
 end
 
-function _wait_shared_task(f::Function, M::EtcdSchedMeta, brokerid::String; wait_index::Int=(M.start_index+1))
+function _wait_shared_task(f::Function, M::EtcdSchedMeta; wait_index::Int=(M.start_index+1))
     _purge_completed_watches(M)
-    k = taskpath(M, brokerid)
+    k = taskpath(M)
 
     M.watches[k] = watchloop(M.cli, k, (resp)->_watchloop_end_cond(M, resp); recursive=true, wait_index=wait_index) do resp
         respnode = resp["node"]
@@ -248,15 +250,15 @@ function _create_delete_shared_task(M::EtcdSchedMeta, action::String, key::Strin
     nothing
 end
 
-function _track_shared_tasks(M::EtcdSchedMeta, brokerid::String)
+function _track_shared_tasks(M::EtcdSchedMeta)
     # get the contents one time
-    tasks, last_index = _get_shared_tasks(M, brokerid)
+    tasks, last_index = _get_shared_tasks(M)
     for (key,val) in tasks
         _create_delete_shared_task(M, "create", key, val)
     end
 
     # start watch from the last index
-    _wait_shared_task(M, brokerid; wait_index=(last_index+1)) do action, key, val
+    _wait_shared_task(M; wait_index=(last_index+1)) do action, key, val
         _create_delete_shared_task(M, action, key, val)
     end
 end

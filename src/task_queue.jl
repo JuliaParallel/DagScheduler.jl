@@ -57,7 +57,7 @@ function task_annotation(stack::Sched, task::TaskIdType, addmode::Bool)
 end
 
 function share(stack::Sched, task::TaskIdType, allow_dup::Bool=false)
-    share_task(stack.meta, string(stack.brokerid), task, allow_dup)
+    share_task(stack.meta, task, allow_dup)
     task
 end
 function enqueue(reserved::Vector{TaskIdType}, task::TaskIdType)
@@ -110,7 +110,7 @@ function init(env::Sched, task::Thunk; result_callback=nothing)
     Dagger.dependents(task, env.dependents)
     walk_dag(task, x->(isa(x, Thunk) && (env.taskidmap[x.id] = x); nothing), false)
 
-    init(env.meta, string(env.brokerid);
+    init(env.meta, Int(env.brokerid);
         add_annotation=(id)->task_annotation(env, id, true),
         del_annotation=(id)->task_annotation(env, id, false),
         result_callback=result_callback)
@@ -164,8 +164,8 @@ function stolen_task_input_watchlist(env::Sched, task::TaskIdType)
     dependents
 end
 =#
-function steal(env::Sched, from::UInt64=env.brokerid)
-    task = steal_task(env.meta, string(from))
+function steal(env::Sched)
+    task = steal_task(env.meta)
     if task !== NoTask
         push!(env.stolen, task)
         env.nstolen += 1

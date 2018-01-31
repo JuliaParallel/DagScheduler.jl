@@ -62,8 +62,8 @@ sharedcounterpath(M::ShmemSchedMeta) = sharedcounterpath(M.path)
 sharedcounterpath(path::String) = joinpath(path, "counter")
 lmdbpath(path::String) = joinpath(path, "lmdb")
 
-function init(M::ShmemSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity, result_callback=nothing)
-    M.brokerid = parse(Int, brokerid)
+function init(M::ShmemSchedMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
+    M.brokerid = brokerid
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
     M.result_callback = result_callback
@@ -156,7 +156,7 @@ function cleanup(M::ShmemSchedMeta)
     nothing
 end
 
-function share_task(M::ShmemSchedMeta, brokerid::String, id::TaskIdType, allow_dup::Bool)
+function share_task(M::ShmemSchedMeta, id::TaskIdType, allow_dup::Bool)
     canshare = false
     withlock(M.allsharedtasks.lck) do
         if !(id in M.allsharedtasks)
@@ -179,7 +179,7 @@ function share_task(M::ShmemSchedMeta, brokerid::String, id::TaskIdType, allow_d
     nothing
 end
 
-function steal_task(M::ShmemSchedMeta, brokerid::String)
+function steal_task(M::ShmemSchedMeta)
     task = NoTask
     withlock(M.sharedtasks.lck) do
         isempty(M.sharedtasks) || (task = shift!(M.sharedtasks))

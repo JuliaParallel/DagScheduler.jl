@@ -32,8 +32,8 @@ function Base.show(io::IO, M::SimpleSchedMeta)
     print(io, "SimpleSchedMeta(", M.path, ")")
 end
 
-function init(M::SimpleSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity, result_callback=nothing)
-    M.brokerid = parse(Int, brokerid)
+function init(M::SimpleSchedMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
+    M.brokerid = brokerid
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
     M.result_callback = result_callback
@@ -112,12 +112,12 @@ end
 function cleanup(M::SimpleSchedMeta)
 end
 
-function share_task(M::SimpleSchedMeta, brokerid::String, id::TaskIdType, allow_dup::Bool)
+function share_task(M::SimpleSchedMeta, id::TaskIdType, allow_dup::Bool)
     brokercall(()->broker_share_task(id, M.add_annotation(id), allow_dup), M)
     nothing
 end
 
-function steal_task(M::SimpleSchedMeta, brokerid::String)
+function steal_task(M::SimpleSchedMeta)
     taskid = brokercall(broker_steal_task, M)::TaskIdType
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
