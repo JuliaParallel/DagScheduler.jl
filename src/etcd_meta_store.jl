@@ -114,16 +114,24 @@ function cleanup(M::EtcdSchedMeta)
     end
 end
 
-function share_task(M::EtcdSchedMeta, brokerid::String, id::TaskIdType)
+function share_task(M::EtcdSchedMeta, brokerid::String, id::TaskIdType, allow_dup::Bool)
     s = sharepath(M, id)
     last_index = M.start_index
+
+    canshare = false
     try
         Etcd.create(M.cli, s, "")
+        canshare = true
+    catch ex
+        (isa(ex, EtcdError) && (ex.resp["errorCode"] == 105)) || rethrow(ex)
+    end
+
+    canshare |= allow_dup
+
+    if canshare
         annotated = M.add_annotation(id)
         k = taskpath(M, brokerid)
         set(M.cli, k, string(annotated); ordered=true)
-    catch ex
-        (isa(ex, EtcdError) && (ex.resp["errorCode"] == 105)) || rethrow(ex)
     end
 
     nothing

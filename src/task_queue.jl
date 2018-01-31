@@ -29,12 +29,12 @@ end
 
 # enqueue can enqueue either to the reserved or shared section
 # enqueuing to shared section is done under lock
-function enqueue(stack::Sched, task::TaskIdType, isreserved::Bool)
+function enqueue(stack::Sched, task::TaskIdType, isreserved::Bool, allow_dup::Bool=false)
     if isreserved
         enqueue(stack.reserved, task)
     else
         stack.nshared += 1
-        share(stack, task)
+        share(stack, task, allow_dup)
     end
 end
 
@@ -56,8 +56,8 @@ function task_annotation(stack::Sched, task::TaskIdType, addmode::Bool)
     task
 end
 
-function share(stack::Sched, task::TaskIdType)
-    share_task(stack.meta, string(stack.brokerid), task)
+function share(stack::Sched, task::TaskIdType, allow_dup::Bool=false)
+    share_task(stack.meta, string(stack.brokerid), task, allow_dup)
     task
 end
 function enqueue(reserved::Vector{TaskIdType}, task::TaskIdType)

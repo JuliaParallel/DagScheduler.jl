@@ -156,7 +156,7 @@ function cleanup(M::ShmemSchedMeta)
     nothing
 end
 
-function share_task(M::ShmemSchedMeta, brokerid::String, id::TaskIdType)
+function share_task(M::ShmemSchedMeta, brokerid::String, id::TaskIdType, allow_dup::Bool)
     canshare = false
     withlock(M.allsharedtasks.lck) do
         if !(id in M.allsharedtasks)
@@ -164,6 +164,8 @@ function share_task(M::ShmemSchedMeta, brokerid::String, id::TaskIdType)
             push!(M.allsharedtasks, id)
         end
     end
+
+    canshare |= allow_dup
 
     if canshare
         annotated = M.add_annotation(id)

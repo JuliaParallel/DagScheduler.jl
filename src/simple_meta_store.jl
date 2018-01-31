@@ -112,8 +112,8 @@ end
 function cleanup(M::SimpleSchedMeta)
 end
 
-function share_task(M::SimpleSchedMeta, brokerid::String, id::TaskIdType)
-    brokercall(()->broker_share_task(id, M.add_annotation(id)), M)
+function share_task(M::SimpleSchedMeta, brokerid::String, id::TaskIdType, allow_dup::Bool)
+    brokercall(()->broker_share_task(id, M.add_annotation(id), allow_dup), M)
     nothing
 end
 
@@ -183,11 +183,11 @@ function broker_has_result(k)
     k in keys(META)
 end
 
-function broker_share_task(id::TaskIdType, annotated::TaskIdType)
+function broker_share_task(id::TaskIdType, annotated::TaskIdType, allow_dup::Bool)
     M = (DagScheduler.genv[].meta)::SimpleSchedMeta
     s = sharepath(M, id)
     T = TASKS[]
-    canput = withtaskmutex() do
+    canshare = withtaskmutex() do
         if !(s in keys(META))
             META[s] = ""
             true
@@ -195,7 +195,8 @@ function broker_share_task(id::TaskIdType, annotated::TaskIdType)
             false
         end
     end
-    if canput
+    canshare |= allow_dup
+    if canshare
         put!(T, annotated)
         M.sharemode.ncreated += 1
         M.sharemode.nshared += 1

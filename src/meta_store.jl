@@ -93,7 +93,7 @@ wait_trigger{T<:SchedMeta}(M::T; timeoutsec::Int=5) = error("method not implemen
 delete!{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 reset{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 cleanup{T<:SchedMeta}(M::T) = error("method not implemented for $T")
-share_task{T<:SchedMeta}(M::T, brokerid::String, id::TaskIdType) = error("method not implemented for $T")
+share_task{T<:SchedMeta}(M::T, brokerid::String, id::TaskIdType, allow_dup::Bool) = error("method not implemented for $T")
 steal_task{T<:SchedMeta}(M::T, brokerid::String) = error("method not implemented for $T")
 set_result{T<:SchedMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
 get_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
