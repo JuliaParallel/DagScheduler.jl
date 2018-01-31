@@ -113,7 +113,7 @@ function cleanup(M::SimpleSchedMeta)
 end
 
 function share_task(M::SimpleSchedMeta, brokerid::String, id::TaskIdType)
-    brokercall(()->broker_share_task(id, M.add_annotation(id), brokerid), M)
+    brokercall(()->broker_share_task(id, M.add_annotation(id)), M)
     nothing
 end
 
@@ -183,7 +183,7 @@ function broker_has_result(k)
     k in keys(META)
 end
 
-function broker_share_task(id::TaskIdType, annotated::TaskIdType, brokerid::String)
+function broker_share_task(id::TaskIdType, annotated::TaskIdType)
     M = (DagScheduler.genv[].meta)::SimpleSchedMeta
     s = sharepath(M, id)
     T = TASKS[]
