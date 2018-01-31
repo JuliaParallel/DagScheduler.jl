@@ -22,7 +22,7 @@ mutable struct RunEnv
         ((nexecutors > 1) || (nworkers() < nexecutors)) || error("need at least two workers")
 
         # ensure clean path
-        delete_meta(rootpath)
+        delete_meta(rootpath, masterid)
 
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
@@ -45,7 +45,7 @@ function wait_for_executors(runenv::RunEnv)
         end
     end
     # TODO: execute delete_meta on brokers for broker env cleanup
-    delete_meta(runenv.rootpath)
+    delete_meta(runenv.rootpath, runenv.masterid)
     nothing
 end
 
@@ -66,15 +66,17 @@ function print_stats(runenv::RunEnv)
     nothing
 end
 
-function delete_meta(rootpath::String)
-    M = metastore(NODE_META_IMPL, rootpath, 0)
+function delete_meta(rootpath::String, brokerid::Integer)
+    broker_rootpath = joinpath(rootpath, string(brokerid))
+    M = metastore(NODE_META_IMPL, broker_rootpath, 0)
     M.brokerid = myid()
     delete!(M)
     nothing
 end
 
-function cleanup_meta(rootpath::String)
-    M = metastore(NODE_META_IMPL, rootpath, 0)
+function cleanup_meta(rootpath::String, brokerid::Integer)
+    broker_rootpath = joinpath(rootpath, string(brokerid))
+    M = metastore(NODE_META_IMPL, broker_rootpath, 0)
     M.brokerid = myid()
     cleanup(M)
     nothing
@@ -228,12 +230,12 @@ function cleanup(runenv::RunEnv)
         wait(runenv.reset_task)
         runenv.reset_task = nothing
     end
-    delete_meta(runenv.rootpath)
+    delete_meta(runenv.rootpath, runenv.masterid)
     for node in runenv.nodes
         empty!(node.executor_tasks)
     end
     @everywhere DagScheduler.genv[] = nothing
-    cleanup_meta(runenv.rootpath)
+    cleanup_meta(runenv.rootpath, runenv.masterid)
     # TODO: spawn remote tasks on brokers to cleanup meta on brokers
     nothing
 end

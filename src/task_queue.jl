@@ -17,8 +17,9 @@ mutable struct Sched
     debug::Bool                                 # switch on debug logging
 
     function Sched(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
+        broker_rootpath = joinpath(rootpath, string(brokerid))
         new(id, brokerid, rootpath, role,
-            metastore(metastore_impl, rootpath, help_threshold),
+            metastore(metastore_impl, broker_rootpath, help_threshold),
             Vector{TaskIdType}(),
             Set{TaskIdType}(),
             Set{TaskIdType}(),
