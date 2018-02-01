@@ -37,7 +37,7 @@ function init(M::SimpleSchedMeta, brokerid::Int; add_annotation=identity, del_an
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
     M.result_callback = result_callback
-    M.results_channel = brokercall(()->register(RESULTS), M)
+    M.results_channel = brokercall(broker_register_for_results, M)
     donetasks = brokercall(broker_get_donetasks, M)::Set{TaskIdType}
     union!(M.donetasks, donetasks)
     nothing
@@ -72,15 +72,17 @@ end
 
 function wait_trigger(M::SimpleSchedMeta; timeoutsec::Int=5)
     trigger = M.results_channel
+    fire = true
     if !isready(trigger)
         @schedule begin
             sleep(timeoutsec)
-            !isready(trigger) && put!(trigger, (TIMEOUT_KEY,""))
+            fire && !isready(trigger) && put!(trigger, (TIMEOUT_KEY,""))
         end
     end
 
     # process results and sharemode notifications
     (k,v) = take!(M.results_channel)
+    fire = false
     process_trigger(M, k, v)
     process_triggers(M)
 
@@ -113,7 +115,8 @@ function cleanup(M::SimpleSchedMeta)
 end
 
 function share_task(M::SimpleSchedMeta, id::TaskIdType, allow_dup::Bool)
-    brokercall(()->broker_share_task(id, M.add_annotation(id), allow_dup), M)
+    annotated_task = M.add_annotation(id)
+    brokercall(broker_share_task, M, id, annotated_task, allow_dup)
     nothing
 end
 
@@ -127,7 +130,8 @@ function set_result(M::SimpleSchedMeta, id::TaskIdType, val; refcount::UInt64=UI
     k = resultpath(M, id)
     M.proclocal[k] = val
     if !processlocal
-        brokercall(()->broker_set_result(k, meta_ser((val,refcount))), M)
+        serval = meta_ser((val,refcount))
+        brokercall(broker_set_result, M, k, serval)
     end
     push!(M.donetasks, id)
     nothing
@@ -139,7 +143,7 @@ function get_result(M::SimpleSchedMeta, id::TaskIdType)
     if k in keys(M.proclocal)
         M.proclocal[k]
     else
-        v = brokercall(()->broker_get_result(k), M)::String
+        v = brokercall(broker_get_result, M, k)::String
         val, refcount = meta_deser(v)
         M.proclocal[k] = val
         val
@@ -159,11 +163,12 @@ function export_local_result(M::SimpleSchedMeta, id::TaskIdType, executable, ref
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
 
-    exists = brokercall(()->broker_has_result(k), M)::Bool
+    exists = brokercall(broker_has_result, M, k)::Bool
     exists && return
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
-    brokercall(()->broker_set_result(k, meta_ser((val,refcount))), M)
+    serval = meta_ser((val,refcount))
+    brokercall(broker_set_result, M, k, ser_val)
     nothing
 end
 
@@ -243,6 +248,10 @@ end
 
 function broker_get_result(k::String)
     META[k]
+end
+
+function broker_register_for_results()
+    register(RESULTS)
 end
 
 function broker_get_donetasks()

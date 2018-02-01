@@ -67,7 +67,7 @@ function init(M::ShmemSchedMeta, brokerid::Int; add_annotation=identity, del_ann
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
     M.result_callback = result_callback
-    M.trigger = brokercall(()->register(pinger), M)
+    M.trigger = brokercall(broker_register, M)
     nothing
 end
 
@@ -85,13 +85,15 @@ end
 
 function wait_trigger(M::ShmemSchedMeta; timeoutsec::Int=5)
     trigger = M.trigger
+    fire = true
     if !isready(trigger)
         @schedule begin
             sleep(timeoutsec)
-            !isready(trigger) && put!(trigger, nothing)
+            fire && !isready(trigger) && put!(trigger, nothing)
         end
     end
     take!(trigger)
+    fire = false
     if M.result_callback !== nothing
         invoke_result_callbacks(M)
     end
@@ -304,4 +306,8 @@ ifpingneeded(recepient::RemoteChannel{Channel{Void}}, val::Void) = !isready(rece
 function broker_ping()
     put!(pinger, nothing, ifpingneeded)
     nothing
+end
+
+function broker_register()
+    register(pinger)
 end

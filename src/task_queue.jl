@@ -2,7 +2,7 @@ mutable struct Sched
     id::UInt64                                  # component id
     brokerid::UInt64                            # broker id
     rootpath::String                            # root path identifying the run
-    role::Symbol                                # :executor or :broker
+    role::Symbol                                # :executor, :broker or :master
     meta::SchedMeta                             # shared metadata store
     reserved::Vector{TaskIdType}                # tasks reserved for this component
     stolen::Set{TaskIdType}                     # tasks that this component has stolen from others
@@ -100,6 +100,12 @@ function reset(env::Sched)
     nothing
 end
 
+const join_count = Ref(0)
+
+function incr_join_count()
+    join_count[] += 1
+end
+
 function init(env::Sched, task::Thunk; result_callback=nothing)
     if env.reset_task !== nothing
         try
@@ -115,6 +121,7 @@ function init(env::Sched, task::Thunk; result_callback=nothing)
         add_annotation=(id)->task_annotation(env, id, true),
         del_annotation=(id)->task_annotation(env, id, false),
         result_callback=result_callback)
+    remotecall_wait(incr_join_count, 1)
     nothing
 end
 

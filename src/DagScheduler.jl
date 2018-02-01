@@ -7,15 +7,17 @@ using MemPool
 import Dagger: istask, inputs, Chunk
 import Base: delete!
 
-export runmaster, runbroker, runexecutor, rundag, RunEnv, cleanup
+export runmaster, runbroker, runexecutor, rundag, RunEnv, NodeEnv, cleanup
 
-#const NODE_META_IMPL = "DagScheduler.SimpleMeta.SimpleSchedMeta"
-const NODE_META_IMPL = "DagScheduler.ShmemMeta.ShmemSchedMeta"
-#const NODE_META_IMPL = "DagScheduler.EtcdMeta.EtcdSchedMeta"
-
-#const CLUSTER_META_IMPL = "DagScheduler.SimpleMeta.SimpleSchedMeta"
-const CLUSTER_META_IMPL = "DagScheduler.ShmemMeta.ShmemSchedMeta"
-#const CLUSTER_META_IMPL = "DagScheduler.EtcdMeta.EtcdSchedMeta"
+const META_IMPL = Dict(
+    # :node => "DagScheduler.SimpleMeta.SimpleSchedMeta",
+    :node => "DagScheduler.ShmemMeta.ShmemSchedMeta",
+    # :node => "DagScheduler.EtcdMeta.EtcdSchedMeta",
+    :cluster => "DagScheduler.SimpleMeta.SimpleSchedMeta",
+    # :cluster => "DagScheduler.ShmemMeta.ShmemSchedMeta",
+    # :cluster => "DagScheduler.EtcdMeta.EtcdSchedMeta",
+    :_ => "_"
+)
 
 include("common.jl")
 include("bcast_channel.jl")

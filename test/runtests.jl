@@ -1,80 +1,22 @@
-addprocs(5)
+const opts = Base.JLOptions()
+const inline_flag = opts.can_inline == 1 ? `` : `--inline=no`
+const cov_flag = (opts.code_coverage == 1) ? `--code-coverage=user` :
+                 (opts.code_coverage == 2) ? `--code-coverage=all` :
+                 ``
 
-include("daggen.jl")
-using DagScheduler
-using Base.Test
-
-isdir(".mempool") && rm(".mempool"; recursive=true)
-
-runenv = RunEnv()
-
-@testset "deep dag" begin
-    info("Testing deep dag...")
-    dag1 = gen_straight_dag(ones(Int, 6^4))
-    result = collect(rundag(runenv, dag1))
-    info("result = ", result)
-    @test result == 1
-    DagScheduler.print_stats(runenv)
-
-    info("Testing cross connected dag...")
-    dag3 = gen_cross_dag()
-    result = collect(rundag(runenv, dag3))
-    info("result = ", result)
-    @test result == 84
-    DagScheduler.print_stats(runenv)
+function run_test(script)
+    srvrscript = joinpath(dirname(@__FILE__), script)
+    srvrcmd = `$(joinpath(JULIA_HOME, "julia")) $cov_flag $inline_flag $script`
+    println("Running tests from ", script, "\n", "="^60)
+    ret = run(srvrcmd)
+    println("Finished ", script, "\n", "="^60)
+    nothing
 end
 
-@testset "sorting" begin
-    info("Testing sorting...")
-
-    for L in (10^6, 10^7)
-        dag2 = gen_sort_dag(L, 40, 4, 1)
-        result = collect(rundag(runenv, dag2))
-        info("result = ", typeof(result), ", length: ", length(result), ", sorted: ", issorted(result))
-        @test isa(result, Array{Float64,1})
-        @test issorted(result)
-        @test length(result) == L
-        @everywhere MemPool.cleanup()
-        DagScheduler.print_stats(runenv)
-
-        # for cross dag
-        dag4 = gen_sort_dag(L, 40, 4, 40)
-        result = collect(rundag(runenv, dag4))
-        info("result = ", typeof(result), ", length: ", length(result))
-        fullresult = collect(Dagger.treereduce(delayed(vcat), result))
-        @test isa(fullresult, Array{Float64,1})
-        @test issorted(fullresult)
-        @test length(fullresult) == L
-        @everywhere MemPool.cleanup()
-        DagScheduler.print_stats(runenv)
-    end
-end
-
-@testset "meta" begin
-    info("Testing meta annotation...")
-    x = [delayed(rand)(10) for i=1:10]
-    y = delayed((c...) -> [c...]; meta=true)(x...)
-    result = collect(rundag(runenv, y))
-    @test isa(result, Vector{<:Dagger.Chunk})
-    @test length(result) == 10
-    @everywhere MemPool.cleanup()
-    DagScheduler.print_stats(runenv)
-end
-
-cleanup(runenv)
-isdir(".mempool") && rm(".mempool"; recursive=true)
-
-runenv = RunEnv(; executorids=[2,4,6], debug=false)
-
-@testset "selectedworkers" begin
-    x = [delayed(rand)(10) for i=1:10]
-    y = delayed((c...) -> [c...]; meta=true)(x...)
-    result = collect(rundag(runenv, y))
-    @test isa(result, Vector{<:Dagger.Chunk})
-    @test length(result) == 10
-    @everywhere MemPool.cleanup()
-    DagScheduler.print_stats(runenv)
-end
-
-cleanup(runenv)
-isdir(".mempool") && rm(".mempool"; recursive=true)
+run(`ipcs -a`)
+println("===================================")
+run_test("runtests_master_only.jl")
+run_test("runtests_1node.jl")
+run_test("runtests_2node.jl")
+println("===================================")
+run(`ipcs -a`)

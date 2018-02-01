@@ -67,14 +67,17 @@ function _determine_start_index(cli::Etcd.Client, path::String)
 end
 
 function wait_trigger(M::EtcdSchedMeta; timeoutsec::Int=5)
+    fire = true
     if !isready(M.trigger)
         @schedule begin
             i1 = M.start_index
             sleep(timeoutsec)
-            (M.start_index == i1) && !isready(M.trigger) && put!(M.trigger, nothing)
+            fire && (M.start_index == i1) && !isready(M.trigger) && put!(M.trigger, nothing)
         end
     end
     take!(M.trigger)
+    fire = false
+    nothing
 end
 
 function delete!(M::EtcdSchedMeta)

@@ -32,7 +32,7 @@ end
 
 function should_share(sm::ShareMode)
     if sm.nshared == 0
-        true
+        (sm.sharethreshold > 0)
     elseif sm.nshared <= sm.sharethreshold
         incr = take_share_snapshot(sm)
         sm.shouldshare = (incr == 0) ? sm.shouldshare : (incr < 0)
@@ -71,8 +71,8 @@ function repurpose_result_to_export(t::Thunk, val)
     val
 end
 
-function brokercall(fn, M)
-    result = remotecall_fetch(fn, M.brokerid)
+function brokercall(fn, M, args...)
+    result = remotecall_fetch(fn, M.brokerid, args...)
     if isa(result, Exception)
         @show result
         throw(result)
