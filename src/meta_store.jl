@@ -32,7 +32,7 @@ end
 
 function should_share(sm::ShareMode)
     if sm.nshared == 0
-        true
+        (sm.sharethreshold > 0)
     elseif sm.nshared <= sm.sharethreshold
         incr = take_share_snapshot(sm)
         sm.shouldshare = (incr == 0) ? sm.shouldshare : (incr < 0)
@@ -71,8 +71,8 @@ function repurpose_result_to_export(t::Thunk, val)
     val
 end
 
-function brokercall(fn, M)
-    result = remotecall_fetch(fn, M.brokerid)
+function brokercall(fn, M, args...)
+    result = remotecall_fetch(fn, M.brokerid, args...)
     if isa(result, Exception)
         @show result
         throw(result)
@@ -83,18 +83,18 @@ end
 resultroot{T<:SchedMeta}(M::T) = joinpath(M.path, "result")
 resultpath{T<:SchedMeta}(M::T, id::TaskIdType) = joinpath(resultroot(M), string(id))
 sharepath{T<:SchedMeta}(M::T, id::TaskIdType) = joinpath(M.path, "shared", string(id))
-taskpath{T<:SchedMeta}(M::T, brokerid::String) = joinpath(M.path, "broker", brokerid)
+taskpath{T<:SchedMeta}(M::T) = joinpath(M.path, "broker", string(M.brokerid))
 
 should_share{T<:SchedMeta}(M::T) = should_share(M.sharemode)
 should_share{T<:SchedMeta}(M::T, nreserved::Int) = should_share(M.sharemode, nreserved)
 
-init{T<:SchedMeta}(M::T, brokerid::String; add_annotation=identity, del_annotation=identity) = error("method not implemented for $T")
+init{T<:SchedMeta}(M::T, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing) = error("method not implemented for $T")
 wait_trigger{T<:SchedMeta}(M::T; timeoutsec::Int=5) = error("method not implemented for $T")
 delete!{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 reset{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 cleanup{T<:SchedMeta}(M::T) = error("method not implemented for $T")
-share_task{T<:SchedMeta}(M::T, brokerid::String, id::TaskIdType) = error("method not implemented for $T")
-steal_task{T<:SchedMeta}(M::T, brokerid::String) = error("method not implemented for $T")
+share_task{T<:SchedMeta}(M::T, id::TaskIdType, allow_dup::Bool) = error("method not implemented for $T")
+steal_task{T<:SchedMeta}(M::T) = error("method not implemented for $T")
 set_result{T<:SchedMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
 get_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
 has_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")

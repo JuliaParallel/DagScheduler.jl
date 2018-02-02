@@ -1,61 +1,121 @@
-mutable struct RunEnv
-    rootpath::String
+mutable struct NodeEnv
     brokerid::UInt64
+    broker_task::Union{Future,Void}
     executorids::Vector{UInt64}
     executor_tasks::Vector{Future}
     last_task_stat::Vector{Tuple{UInt64,Future}}
     reset_task::Union{Task,Void}
+
+    function NodeEnv(brokerid::Integer, executorids::Vector{Int})
+        new(brokerid, nothing, executorids, Vector{Future}(), Vector{Tuple{UInt64,Future}}(), nothing)
+    end
+end
+
+mutable struct RunEnv
+    rootpath::String
+    masterid::UInt64
+    nodes::Vector{NodeEnv}
+    reset_task::Union{Task,Void}
     debug::Bool
 
-    function RunEnv(; rootpath::String="/dagscheduler", brokerid::Int=myid(), executorids::Vector{Int}=workers(), debug::Bool=false)
-        nexecutors = length(executorids)
-        ((nexecutors > 1) || (nworkers() < nexecutors)) || error("need at least two workers")
+    function RunEnv(; rootpath::String="/dagscheduler", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,workers())], debug::Bool=false)
+        nexecutors = 0
+        for node in nodes
+            nw = length(node.executorids)
+            (nw > 1) || error("need at least two workers on each node")
+            nexecutors += nw
+        end
+        (nexecutors > 1) || error("need at least two workers")
 
-        # ensure clean path
-        delete_meta(rootpath)
+        # ensure clean paths
+        delete_meta(UInt64(masterid), nodes, rootpath)
 
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
 
-        new(rootpath, brokerid, executorids, Vector{Future}(), Vector{Tuple{UInt64,Future}}(), nothing, debug)
+        new(rootpath, masterid, nodes, nothing, debug)
     end
 end
 
 function wait_for_executors(runenv::RunEnv)
-    empty!(runenv.last_task_stat)
-    append!(runenv.last_task_stat, zip(runenv.executorids, runenv.executor_tasks))
-    empty!(runenv.executor_tasks)
-    for (pid,task) in runenv.last_task_stat
-        isready(task) || wait(task)
+    @sync for node in runenv.nodes
+        @async begin
+            empty!(node.last_task_stat)
+            if node.broker_task !== nothing
+                push!(node.last_task_stat, (node.brokerid, node.broker_task))
+            end
+            append!(node.last_task_stat, zip(node.executorids, node.executor_tasks))
+            empty!(node.executor_tasks)
+            node.broker_task = nothing
+            for (pid,task) in node.last_task_stat
+                isready(task) || wait(task)
+            end
+        end
     end
-    delete_meta(runenv.rootpath)
+
+    delete_meta(runenv.masterid, runenv.nodes, runenv.rootpath)
     nothing
 end
 
 function print_stats(runenv::RunEnv)
-    map((x)->begin
-        pid = x[1]
-        result = fetch(x[2])
-        if isa(result, Tuple)
-            stole, shared, executed = fetch(x[2])
-            info("executor $pid stole $stole, shared $shared, executed $executed tasks") 
-        else
-            info("executor $pid: $result")
-        end
-    end, runenv.last_task_stat)
+    info("execution stats:")
+    for node in runenv.nodes
+        map((x)->begin
+            pid = x[1]
+            result = fetch(x[2])
+            role = (pid === node.brokerid) ? "broker" : "executor"
+            if isa(result, Tuple)
+                if role == "executor"
+                    stole, shared, executed = fetch(x[2])
+                    info("  executor $pid stole $stole, shared $shared, executed $executed tasks")
+                else
+                    stole, shared = fetch(x[2])
+                    info("broker $pid stole $stole, shared $shared tasks")
+                end
+            else
+                info("$role $pid: $result")
+            end
+        end, node.last_task_stat)
+    end
     nothing
 end
 
-function delete_meta(rootpath::String)
-    M = metastore(META_IMPL, rootpath, 0)
+function delete_meta(masterid::UInt64, nodes::Vector{NodeEnv}, rootpath::String)
+    @sync begin
+        @async delete_meta(META_IMPL[:cluster], rootpath, masterid)
+        for node in nodes
+            if node.brokerid !== masterid
+                @async remotecall_wait(delete_meta, node.brokerid, META_IMPL[:node], rootpath, node.brokerid)
+            end
+        end
+    end
+    nothing
+end
+
+function delete_meta(metaimpl::String, rootpath::String, brokerid::Integer)
+    broker_rootpath = joinpath(rootpath, string(brokerid))
+    M = metastore(metaimpl, broker_rootpath, 0)
     M.brokerid = myid()
     delete!(M)
     nothing
 end
 
-function cleanup_meta(rootpath::String)
-    M = metastore(META_IMPL, rootpath, 0)
-    M.brokerid = myid()
+function cleanup_meta(masterid::UInt64, nodes::Vector{NodeEnv}, rootpath::String)
+    @sync begin
+        @async cleanup_meta(META_IMPL[:cluster], rootpath, masterid)
+        for node in nodes
+            if node.brokerid !== masterid
+                @async remotecall_wait(cleanup_meta, node.brokerid, META_IMPL[:node], rootpath, node.brokerid)
+            end
+        end
+    end
+    nothing
+end
+
+function cleanup_meta(metaimpl::String, rootpath::String, brokerid::Integer)
+    broker_rootpath = joinpath(rootpath, string(brokerid))
+    M = metastore(metaimpl, broker_rootpath, 0)
+    M.brokerid = brokerid
     cleanup(M)
     nothing
 end
@@ -64,20 +124,171 @@ end
 # per process scheduler context
 #------------------------------------------------------------------
 const genv = Ref{Union{Sched,Void}}(nothing)
+const upstream_genv = Ref{Union{Sched,Void}}(nothing)
+
+#------------------------------------------------------------------
+# helper methods for the broker
+#------------------------------------------------------------------
+function upstream_result_to_local(env, task, res)
+    try
+        if !has_result(env.meta, task)
+            t = get_executable(env, task)
+            refcount = UInt64(length(env.dependents[t]))
+            set_result(env.meta, task, res; refcount=refcount, processlocal=false)
+        end
+    catch ex
+        taskexception(env, ex, catch_backtrace())
+        rethrow(ex)
+    end
+    nothing
+end
+
+function local_result_to_upstream(upenv, task, res)
+    try
+        if ((task === taskid(upenv.dag_root)) || was_stolen(upenv, task)) && !has_result(upenv.meta, task)
+            t = get_executable(upenv, task)
+            refcount = UInt64(length(upenv.dependents[t]))
+            set_result(upenv.meta, task, res; refcount=refcount, processlocal=false)
+        end
+    catch ex
+        taskexception(env, ex, catch_backtrace())
+        rethrow(ex)
+    end
+    nothing
+end
+
+function unify_trigger(env::Sched, root::TaskIdType, unified_trigger::Channel{Void}, do_trigger::Ref{Bool})
+    while !has_result(env.meta, root)
+        wait_trigger(env.meta)
+        isready(unified_trigger) || put!(unified_trigger, nothing)
+    end
+    do_trigger[] = false
+    put!(unified_trigger, nothing)
+    nothing
+end
+
+function broker_tasks(upenv::Sched, env::Sched, unified_trigger::Channel{Void}, do_trigger::Ref{Bool})
+    try
+        last_upstream = last_downstream = 0.0
+        while do_trigger[]
+            tasklog(env, "doing broker tasks")
+            tnow = time()
+
+            upstat, downstat = upenv.meta.sharemode, env.meta.sharemode
+            needed_upstream, needed_downstream = should_share(upenv), should_share(env)
+            have_upstream = (upstat.ncreated > 0) ? (upstat.nshared > 0) : true
+            have_downstream = (downstat.ncreated > 0) ? (downstat.nshared > 0) : true
+            from_upstream = needed_downstream && have_upstream && ((tnow - last_downstream) > 0.5)
+            from_downstream = needed_upstream && !needed_downstream && have_downstream && ((tnow - last_upstream) > 0.5)
+
+            tasklog(env, "nshared up,down = $(upstat.nshared),$(downstat.nshared)")
+            tasklog(env, "ncreated up,down = $(upstat.ncreated),$(downstat.ncreated)")
+            tasklog(env, "should_share up,down = $(needed_upstream),$(needed_downstream)")
+
+            if from_upstream
+                tasklog(env, "bring new upstream tasks into local node")
+                # bring new upstream tasks into local node
+                task = steal(upenv)
+                tasklog(env, (task === NoTask) ? "stole NoTask" : "stole $task")
+                if task !== NoTask
+                    enqueue(env, task, false, true)
+                    from_downstream = false
+                    last_upstream = tnow
+                end
+            end
+
+            if from_downstream
+                tasklog(env, "export shared node tasks to upstream brokers")
+                # export shared node tasks to upstream brokers
+                task = steal(env)
+                tasklog(env, (task === NoTask) ? "stole NoTask" : "stole $task")
+                if task !== NoTask
+                    enqueue(upenv, task, false, true)
+                    last_downstream = tnow
+                end
+            end
+
+            tasklog(env, "waiting on trigger")
+            # wait for trigger
+            take!(unified_trigger)
+            while isready(unified_trigger)
+                take!(unified_trigger)
+            end
+        end
+    catch ex
+        taskexception(env, ex, catch_backtrace())
+        rethrow(ex)
+    end
+    nothing
+end
 
 #-------------------------------------------------------------------
 # broker provides the initial tasks and coordinates among executors
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
-function runbroker(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
+function runbroker(rootpath::String, id::UInt64, upstream_brokerid::UInt64, root_t; debug::Bool=false, upstream_help_threshold::Int=typemax(Int), downstream_help_threshold::Int=typemax(Int))
     if genv[] === nothing
-        env = genv[] = Sched(rootpath, id, brokerid, :broker, typemax(Int); debug=debug)
+        env = genv[] = Sched(META_IMPL[:node], rootpath, id, id, :broker, downstream_help_threshold; debug=debug)
+    else
+        env = (genv[])::Sched
+    end
+
+    if upstream_genv[] === nothing
+        upenv = upstream_genv[] = Sched(META_IMPL[:cluster], rootpath, id, upstream_brokerid, :executor, upstream_help_threshold; debug=debug)
+    else
+        upenv = (upstream_genv[])::Sched
+    end
+
+    env.debug = debug
+    init(env, root_t; result_callback=(task,res)->local_result_to_upstream(upenv,task,res))
+    upenv.debug = debug
+    init(upenv, root_t; result_callback=(task,res)->upstream_result_to_local(env,task,res))
+    tasklog(env, "invoked")
+
+    try
+        root = taskid(root_t)
+        unified_trigger = Channel{Void}(10)
+        do_trigger = Ref(true)
+
+        @sync begin
+            # monitor the global and node queues
+            @async unify_trigger(upenv, root, unified_trigger, do_trigger)
+            @async unify_trigger(env, root, unified_trigger, do_trigger)
+
+            # broker tasks between this node and other nodes
+            @async broker_tasks(upenv, env, unified_trigger, do_trigger)
+        end
+
+        tasklog(env, "stole ", env.nstolen, " shared ", env.nshared, " tasks")
+        #info("broker stole $(env.nstolen), shared $(env.nshared) tasks")
+
+        return (env.nstolen, env.nshared)
+    catch ex
+        taskexception(env, ex, catch_backtrace())
+        rethrow(ex)
+    finally
+        async_reset(env)
+        async_reset(upenv)
+    end
+end
+
+#-------------------------------------------------------------------
+# broker provides the initial tasks and coordinates among executors
+# by stealing spare tasks from all peers and letting peers steal
+#--------------------------------------------------------------------
+function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false, waitfor::Int=0)
+    if genv[] === nothing
+        env = genv[] = Sched(META_IMPL[:cluster], rootpath, id, brokerid, :master, typemax(Int); debug=debug)
     else
         env = (genv[])::Sched
     end
     env.debug = debug
     init(env, root_t)
     tasklog(env, "invoked")
+
+    while join_count[] < waitfor
+        sleep(0.1)
+    end
 
     try
         task = root = taskid(root_t)
@@ -95,13 +306,14 @@ function runbroker(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
     finally
+        join_count[] = 0
         async_reset(env)
     end
 end
 
 function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false, help_threshold::Int=typemax(Int))
     if genv[] === nothing
-        env = genv[] = Sched(rootpath, id, brokerid, :executor, help_threshold; debug=debug)
+        env = genv[] = Sched(META_IMPL[:node], rootpath, id, brokerid, :executor, help_threshold; debug=debug)
     else
         env = (genv[])::Sched
     end
@@ -166,10 +378,13 @@ function cleanup(runenv::RunEnv)
         wait(runenv.reset_task)
         runenv.reset_task = nothing
     end
-    delete_meta(runenv.rootpath)
-    empty!(runenv.executor_tasks)
+    delete_meta(runenv.masterid, runenv.nodes, runenv.rootpath)
+    for node in runenv.nodes
+        empty!(node.executor_tasks)
+    end
     @everywhere DagScheduler.genv[] = nothing
-    cleanup_meta(runenv.rootpath)
+    @everywhere DagScheduler.upstream_genv[] = nothing
+    cleanup_meta(runenv.masterid, runenv.nodes, runenv.rootpath)
     nothing
 end
 
@@ -184,17 +399,33 @@ function rundag(runenv::RunEnv, dag::Thunk)
         runenv.reset_task = nothing
     end
 
-    help_threshold = length(runenv.executorids) - 1
+    upstream_help_threshold = length(runenv.nodes) - 1
+    nw = 0
 
-    for idx in 1:length(runenv.executorids)
-        executorid = runenv.executorids[idx]
-        #info("spawning executor $executorid")
-        executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, runenv.brokerid, dag; debug=runenv.debug, help_threshold=help_threshold)
-        push!(runenv.executor_tasks, executor_task)
+    for node in runenv.nodes
+        help_threshold = length(node.executorids) - 1
+
+        for idx in 1:length(node.executorids)
+            executorid = node.executorids[idx]
+            #info("spawning executor $executorid")
+            executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, node.brokerid, dag; debug=runenv.debug, help_threshold=help_threshold)
+            push!(node.executor_tasks, executor_task)
+            nw += 1
+        end
+
+        if node.brokerid !== runenv.masterid
+            #info("spawning broker $(node.brokerid)")
+            node.broker_task = @spawnat node.brokerid runbroker(runenv.rootpath, node.brokerid, runenv.masterid, dag;
+                debug=runenv.debug,
+                upstream_help_threshold=upstream_help_threshold,
+                downstream_help_threshold=help_threshold)
+            nw += 1
+        end
     end
 
-    #info("spawning broker")
-    res = runbroker(runenv.rootpath, UInt64(myid()), runenv.brokerid, dag; debug=runenv.debug)
+    #info("spawning master broker")
+    res = runmaster(runenv.rootpath, UInt64(myid()), runenv.masterid, dag; debug=runenv.debug, waitfor=(nw+1))
+
     runenv.reset_task = @schedule wait_for_executors(runenv)
     res
 end

@@ -38,6 +38,8 @@ function gen_cross_dag()
     x
 end
 
+show_dag(dag) = println(show_plan(dag))
+
 function gen_straight_dag(inp)
     nextinp = []
     if length(inp) == 6

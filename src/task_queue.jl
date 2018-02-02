@@ -2,7 +2,7 @@ mutable struct Sched
     id::UInt64                                  # component id
     brokerid::UInt64                            # broker id
     rootpath::String                            # root path identifying the run
-    role::Symbol                                # :executor or :broker
+    role::Symbol                                # :executor, :broker or :master
     meta::SchedMeta                             # shared metadata store
     reserved::Vector{TaskIdType}                # tasks reserved for this component
     stolen::Set{TaskIdType}                     # tasks that this component has stolen from others
@@ -16,9 +16,10 @@ mutable struct Sched
     taskidmap::Dict{TaskIdType,Thunk}           # for quick lookup
     debug::Bool                                 # switch on debug logging
 
-    function Sched(rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
+    function Sched(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
+        broker_rootpath = joinpath(rootpath, string(brokerid))
         new(id, brokerid, rootpath, role,
-            metastore(META_IMPL, rootpath, help_threshold),
+            metastore(metastore_impl, broker_rootpath, help_threshold),
             Vector{TaskIdType}(),
             Set{TaskIdType}(),
             Set{TaskIdType}(),
@@ -29,12 +30,12 @@ end
 
 # enqueue can enqueue either to the reserved or shared section
 # enqueuing to shared section is done under lock
-function enqueue(stack::Sched, task::TaskIdType, isreserved::Bool)
+function enqueue(stack::Sched, task::TaskIdType, isreserved::Bool, allow_dup::Bool=false)
     if isreserved
         enqueue(stack.reserved, task)
     else
         stack.nshared += 1
-        share(stack, task)
+        share(stack, task, allow_dup)
     end
 end
 
@@ -56,8 +57,8 @@ function task_annotation(stack::Sched, task::TaskIdType, addmode::Bool)
     task
 end
 
-function share(stack::Sched, task::TaskIdType)
-    share_task(stack.meta, string(stack.brokerid), task)
+function share(stack::Sched, task::TaskIdType, allow_dup::Bool=false)
+    share_task(stack.meta, task, allow_dup)
     task
 end
 function enqueue(reserved::Vector{TaskIdType}, task::TaskIdType)
@@ -99,7 +100,13 @@ function reset(env::Sched)
     nothing
 end
 
-function init(env::Sched, task::Thunk)
+const join_count = Ref(0)
+
+function incr_join_count()
+    join_count[] += 1
+end
+
+function init(env::Sched, task::Thunk; result_callback=nothing)
     if env.reset_task !== nothing
         try
             wait(env.reset_task)
@@ -110,9 +117,11 @@ function init(env::Sched, task::Thunk)
     Dagger.dependents(task, env.dependents)
     walk_dag(task, x->(isa(x, Thunk) && (env.taskidmap[x.id] = x); nothing), false)
 
-    init(env.meta, string(env.brokerid);
+    init(env.meta, Int(env.brokerid);
         add_annotation=(id)->task_annotation(env, id, true),
-        del_annotation=(id)->task_annotation(env, id, false))
+        del_annotation=(id)->task_annotation(env, id, false),
+        result_callback=result_callback)
+    remotecall_wait(incr_join_count, 1)
     nothing
 end
 
@@ -134,7 +143,8 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
             for input in inputs(executable)
                 if istask(input)
                     #tasklog(env, "will keep dependency input for executable ", task)
-                    isthisreserved = (isreserved && (length(env.dependents[input]) < 2)) ? (!reservedforself || !should_share(env)) : false
+                    nocrossdeps = (length(env.dependents[input]) < 2)
+                    isthisreserved = (isreserved && nocrossdeps) ? (!reservedforself || !should_share(env)) : false
                     keep(env, input, depth, isthisreserved)
                     reservedforself = reservedforself || isthisreserved
                 end
@@ -162,8 +172,8 @@ function stolen_task_input_watchlist(env::Sched, task::TaskIdType)
     dependents
 end
 =#
-function steal(env::Sched, from::UInt64=env.brokerid)
-    task = steal_task(env.meta, string(from))
+function steal(env::Sched)
+    task = steal_task(env.meta)
     if task !== NoTask
         push!(env.stolen, task)
         env.nstolen += 1

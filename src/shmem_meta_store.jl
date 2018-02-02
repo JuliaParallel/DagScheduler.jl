@@ -17,6 +17,8 @@ mutable struct ShmemSchedMeta <: SchedMeta
     trigger::Union{Void,RemoteChannel{Channel{Void}}}
     add_annotation::Function
     del_annotation::Function
+    result_callback_pos::Int
+    result_callback::Union{Function,Void}
 
     function ShmemSchedMeta(path::String, sharethreshold::Int)
         path = joinpath("/dev/shm", startswith(path, '/') ? path[2:end] : path)
@@ -46,7 +48,7 @@ mutable struct ShmemSchedMeta <: SchedMeta
         new(path, 0, env, Dict{String,Any}(),
             allsharedtasks, sharedtasks, donetasks,
             ShareMode(sharethreshold), sharedcounter, trigger,
-            identity, identity)
+            identity, identity, 0, nothing)
     end
 end
 
@@ -60,11 +62,12 @@ sharedcounterpath(M::ShmemSchedMeta) = sharedcounterpath(M.path)
 sharedcounterpath(path::String) = joinpath(path, "counter")
 lmdbpath(path::String) = joinpath(path, "lmdb")
 
-function init(M::ShmemSchedMeta, brokerid::String; add_annotation=identity, del_annotation=identity)
-    M.brokerid = parse(Int, brokerid)
+function init(M::ShmemSchedMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
+    M.brokerid = brokerid
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
-    M.trigger = brokercall(()->register(pinger), M)
+    M.result_callback = result_callback
+    M.trigger = brokercall(broker_register, M)
     nothing
 end
 
@@ -82,18 +85,36 @@ end
 
 function wait_trigger(M::ShmemSchedMeta; timeoutsec::Int=5)
     trigger = M.trigger
+    fire = true
     if !isready(trigger)
         @schedule begin
             sleep(timeoutsec)
-            !isready(trigger) && put!(trigger, nothing)
+            fire && !isready(trigger) && put!(trigger, nothing)
         end
     end
     take!(trigger)
+    fire = false
+    if M.result_callback !== nothing
+        invoke_result_callbacks(M)
+    end
     nothing
 end
 
 function pull_trigger(M::ShmemSchedMeta)
     brokercall(broker_ping, M)
+    nothing
+end
+
+function invoke_result_callbacks(M::ShmemSchedMeta)
+    L = withlock(M.donetasks.lck) do
+        length(M.donetasks)
+    end
+    ids = TaskIdType[M.donetasks[idx] for idx in (M.result_callback_pos+1):L]
+    M.result_callback_pos += length(ids)
+    for id in ids
+        val = get_result(M, id)
+        M.result_callback(id, val)
+    end
     nothing
 end
 
@@ -123,6 +144,8 @@ function reset(M::ShmemSchedMeta; delete::Bool=false, dropdb::Bool=true)
     DagScheduler.reset(M.sharemode)
     M.add_annotation = identity
     M.del_annotation = identity
+    M.result_callback = nothing
+    M.result_callback_pos = 0
     nothing
 end
 
@@ -135,7 +158,7 @@ function cleanup(M::ShmemSchedMeta)
     nothing
 end
 
-function share_task(M::ShmemSchedMeta, brokerid::String, id::TaskIdType)
+function share_task(M::ShmemSchedMeta, id::TaskIdType, allow_dup::Bool)
     canshare = false
     withlock(M.allsharedtasks.lck) do
         if !(id in M.allsharedtasks)
@@ -143,6 +166,8 @@ function share_task(M::ShmemSchedMeta, brokerid::String, id::TaskIdType)
             push!(M.allsharedtasks, id)
         end
     end
+
+    canshare |= allow_dup
 
     if canshare
         annotated = M.add_annotation(id)
@@ -156,7 +181,7 @@ function share_task(M::ShmemSchedMeta, brokerid::String, id::TaskIdType)
     nothing
 end
 
-function steal_task(M::ShmemSchedMeta, brokerid::String)
+function steal_task(M::ShmemSchedMeta)
     task = NoTask
     withlock(M.sharedtasks.lck) do
         isempty(M.sharedtasks) || (task = shift!(M.sharedtasks))
@@ -185,11 +210,12 @@ function set_result(M::ShmemSchedMeta, id::TaskIdType, val; refcount::UInt64=UIn
             commit(txn)
             close(M.env, dbi)
         end
-        pull_trigger(M)
-    end
 
-    withlock(M.donetasks.lck) do
-        push!(M.donetasks, id)
+        withlock(M.donetasks.lck) do
+            push!(M.donetasks, id)
+        end
+
+        pull_trigger(M)
     end
 
     sync_sharemode(M)
@@ -218,6 +244,9 @@ function get_result(M::ShmemSchedMeta, id::TaskIdType)
 end
 
 function has_result(M::ShmemSchedMeta, id::TaskIdType)
+    k = resultpath(M, id)
+    (k in keys(M.proclocal)) && (return true)
+
     withlock(M.donetasks.lck) do
         id in M.donetasks
     end
@@ -277,4 +306,8 @@ ifpingneeded(recepient::RemoteChannel{Channel{Void}}, val::Void) = !isready(rece
 function broker_ping()
     put!(pinger, nothing, ifpingneeded)
     nothing
+end
+
+function broker_register()
+    register(pinger)
 end
