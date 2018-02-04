@@ -3,7 +3,7 @@ mutable struct Sched
     brokerid::UInt64                            # broker id
     rootpath::String                            # root path identifying the run
     role::Symbol                                # :executor, :broker or :master
-    meta::SchedMeta                             # shared metadata store
+    meta::ExecutorMeta                             # shared metadata store
     reserved::Vector{TaskIdType}                # tasks reserved for this component
     stolen::Set{TaskIdType}                     # tasks that this component has stolen from others
     expanded::Set{TaskIdType}                   # tasks that have been expanded (not new tasks)

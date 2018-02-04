@@ -6,7 +6,7 @@ const TIMEOUT_KEY = ""
 """
 Metadata store using broker in-memory datastructures
 """
-mutable struct SimpleSchedMeta <: SchedMeta
+mutable struct SimpleExecutorMeta <: ExecutorMeta
     path::String
     brokerid::Int
     proclocal::Dict{String,Any}
@@ -18,7 +18,7 @@ mutable struct SimpleSchedMeta <: SchedMeta
     del_annotation::Function
     result_callback::Union{Function,Void}
 
-    function SimpleSchedMeta(path::String, sharethreshold::Int)
+    function SimpleExecutorMeta(path::String, sharethreshold::Int)
         new(path, myid(),
             Dict{String,Any}(),
             Set{TaskIdType}(),
@@ -28,11 +28,11 @@ mutable struct SimpleSchedMeta <: SchedMeta
     end
 end
 
-function Base.show(io::IO, M::SimpleSchedMeta)
-    print(io, "SimpleSchedMeta(", M.path, ")")
+function Base.show(io::IO, M::SimpleExecutorMeta)
+    print(io, "SimpleExecutorMeta(", M.path, ")")
 end
 
-function init(M::SimpleSchedMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
+function init(M::SimpleExecutorMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.brokerid = brokerid
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
@@ -43,7 +43,7 @@ function init(M::SimpleSchedMeta, brokerid::Int; add_annotation=identity, del_an
     nothing
 end
 
-function process_trigger(M::SimpleSchedMeta, k::String, v::String)
+function process_trigger(M::SimpleExecutorMeta, k::String, v::String)
     if k == TIMEOUT_KEY
         # ignore
     elseif k == SHAREMODE_KEY
@@ -63,14 +63,14 @@ function process_trigger(M::SimpleSchedMeta, k::String, v::String)
     nothing
 end
 
-function process_triggers(M::SimpleSchedMeta)
+function process_triggers(M::SimpleExecutorMeta)
     while isready(M.results_channel)
         (k,v) = take!(M.results_channel)
         process_trigger(M, k, v)
     end
 end
 
-function wait_trigger(M::SimpleSchedMeta; timeoutsec::Int=5)
+function wait_trigger(M::SimpleExecutorMeta; timeoutsec::Int=5)
     trigger = M.results_channel
     fire = true
     if !isready(trigger)
@@ -89,7 +89,7 @@ function wait_trigger(M::SimpleSchedMeta; timeoutsec::Int=5)
     nothing
 end
 
-function delete!(M::SimpleSchedMeta)
+function delete!(M::SimpleExecutorMeta)
     reset(M)
     if myid() === M.brokerid
         empty!(META)
@@ -99,7 +99,7 @@ function delete!(M::SimpleSchedMeta)
     nothing
 end
 
-function reset(M::SimpleSchedMeta)
+function reset(M::SimpleExecutorMeta)
     reset(M.sharemode)
     empty!(M.proclocal)
     empty!(M.donetasks)
@@ -111,21 +111,21 @@ function reset(M::SimpleSchedMeta)
     nothing
 end
 
-function cleanup(M::SimpleSchedMeta)
+function cleanup(M::SimpleExecutorMeta)
 end
 
-function share_task(M::SimpleSchedMeta, id::TaskIdType, allow_dup::Bool)
+function share_task(M::SimpleExecutorMeta, id::TaskIdType, allow_dup::Bool)
     annotated_task = M.add_annotation(id)
     brokercall(broker_share_task, M, id, annotated_task, allow_dup)
     nothing
 end
 
-function steal_task(M::SimpleSchedMeta)
+function steal_task(M::SimpleExecutorMeta)
     taskid = brokercall(broker_steal_task, M)::TaskIdType
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 
-function set_result(M::SimpleSchedMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
+function set_result(M::SimpleExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
     process_triggers(M)
     k = resultpath(M, id)
     M.proclocal[k] = val
@@ -137,7 +137,7 @@ function set_result(M::SimpleSchedMeta, id::TaskIdType, val; refcount::UInt64=UI
     nothing
 end
 
-function get_result(M::SimpleSchedMeta, id::TaskIdType)
+function get_result(M::SimpleExecutorMeta, id::TaskIdType)
     process_triggers(M)
     k = resultpath(M, id)
     if k in keys(M.proclocal)
@@ -150,16 +150,16 @@ function get_result(M::SimpleSchedMeta, id::TaskIdType)
     end
 end
 
-function has_result(M::SimpleSchedMeta, id::TaskIdType)
+function has_result(M::SimpleExecutorMeta, id::TaskIdType)
     #process_triggers(M)
     id in M.donetasks
 end
 
-function decr_result_ref(M::SimpleSchedMeta, id::TaskIdType)
+function decr_result_ref(M::SimpleExecutorMeta, id::TaskIdType)
     2
 end
 
-function export_local_result(M::SimpleSchedMeta, id::TaskIdType, executable, refcount::UInt64)
+function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
 
@@ -189,7 +189,7 @@ function broker_has_result(k)
 end
 
 function broker_share_task(id::TaskIdType, annotated::TaskIdType, allow_dup::Bool)
-    M = (DagScheduler.genv[].meta)::SimpleSchedMeta
+    M = (DagScheduler.genv[].meta)::SimpleExecutorMeta
     s = sharepath(M, id)
     T = TASKS[]
     canshare = withtaskmutex() do
@@ -213,7 +213,7 @@ end
 function broker_steal_task()
     genv = DagScheduler.genv[]
     (genv === nothing) && (return NoTask)
-    M = (genv.meta)::SimpleSchedMeta
+    M = (genv.meta)::SimpleExecutorMeta
     taskid = withtaskmutex() do
         T = TASKS[]
         taskid = NoTask
@@ -257,6 +257,6 @@ end
 function broker_get_donetasks()
     genv = DagScheduler.genv[]
     (genv === nothing) && (return Set{TaskIdType}())
-    M = (genv.meta)::SimpleSchedMeta
+    M = (genv.meta)::SimpleExecutorMeta
     M.donetasks
 end

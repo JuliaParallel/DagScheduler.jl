@@ -10,12 +10,12 @@ import Base: delete!
 export runmaster, runbroker, runexecutor, rundag, RunEnv, NodeEnv, cleanup
 
 const META_IMPL = Dict(
-    # :node => "DagScheduler.SimpleMeta.SimpleSchedMeta",
-    :node => "DagScheduler.ShmemMeta.ShmemSchedMeta",
-    # :node => "DagScheduler.EtcdMeta.EtcdSchedMeta",
-    :cluster => "DagScheduler.SimpleMeta.SimpleSchedMeta",
-    # :cluster => "DagScheduler.ShmemMeta.ShmemSchedMeta",
-    # :cluster => "DagScheduler.EtcdMeta.EtcdSchedMeta",
+    # :node => "DagScheduler.SimpleMeta.SimpleExecutorMeta",
+    :node => "DagScheduler.ShmemMeta.ShmemExecutorMeta",
+    # :node => "DagScheduler.EtcdMeta.EtcdExecutorMeta",
+    :cluster => "DagScheduler.SimpleMeta.SimpleExecutorMeta",
+    # :cluster => "DagScheduler.ShmemMeta.ShmemExecutorMeta",
+    # :cluster => "DagScheduler.EtcdMeta.EtcdExecutorMeta",
     :_ => "_"
 )
 
