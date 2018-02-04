@@ -22,6 +22,14 @@ runenv = RunEnv(; nodes=[node1,node2])
     info("result = ", result)
     @test result == 1
     DagScheduler.print_stats(runenv)
+#=
+    info("Testing cross connected dag...")
+    dag3 = gen_cross_dag()
+    result = collect(rundag(runenv, dag3))
+    info("result = ", result)
+    @test result == 84
+    DagScheduler.print_stats(runenv)
+=#
 end
 
 @testset "sorting" begin
@@ -36,6 +44,18 @@ end
         @test length(result) == L
         @everywhere MemPool.cleanup()
         DagScheduler.print_stats(runenv)
+#=
+        # for cross dag
+        dag4 = gen_sort_dag(L, 40, 4, 40)
+        result = collect(rundag(runenv, dag4))
+        info("result = ", typeof(result), ", length: ", length(result))
+        fullresult = collect(Dagger.treereduce(delayed(vcat), result))
+        @test isa(fullresult, Array{Float64,1})
+        @test issorted(fullresult)
+        @test length(fullresult) == L
+        @everywhere MemPool.cleanup()
+        DagScheduler.print_stats(runenv)
+=#
     end
 end
 

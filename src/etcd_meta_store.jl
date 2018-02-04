@@ -177,7 +177,7 @@ function steal_task(M::EtcdSchedMeta)
         tpath, taskid = tasklist[1]
         try
             resp = delete(M.cli, tpath)
-            last_index = resp["node"]["modifiedIndex"]
+            #last_index = resp["node"]["modifiedIndex"]
             taskid = M.del_annotation(taskid)
             _remove_from_tasklist(tasklist, tpath)
             return taskid
