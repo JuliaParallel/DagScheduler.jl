@@ -6,8 +6,8 @@ using BenchmarkTools
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
 @everywhere begin
-    DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemSchedMeta"
-    DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleSchedMeta"
+    DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+    DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
 end
 
 node1 = NodeEnv(2, [3,4,5])

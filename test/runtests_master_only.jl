@@ -6,8 +6,8 @@ using Base.Test
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
 @everywhere begin
-    DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemSchedMeta"
-    DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemSchedMeta"
+    DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+    DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
 end
 
 node1 = NodeEnv(1, [2,3,4,5,6])

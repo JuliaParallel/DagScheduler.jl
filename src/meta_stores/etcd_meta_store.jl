@@ -3,7 +3,7 @@
 """
 Metadata store using etcd.
 """
-mutable struct EtcdSchedMeta <: SchedMeta
+mutable struct EtcdExecutorMeta <: ExecutorMeta
     path::String
     server::String
     port::UInt
@@ -21,7 +21,7 @@ mutable struct EtcdSchedMeta <: SchedMeta
     del_annotation::Function
     result_callback::Union{Function,Void}
 
-    function EtcdSchedMeta(path::String, sharethreshold::Int)
+    function EtcdExecutorMeta(path::String, sharethreshold::Int)
         server = "127.0.0.1"
         port = UInt(2379)
         # TODO: take a list of failover servers, reconnect on disconnection
@@ -40,11 +40,11 @@ mutable struct EtcdSchedMeta <: SchedMeta
     end
 end
 
-function Base.show(io::IO, M::EtcdSchedMeta)
-    print(io, "EtcdSchedMeta(", M.path, ")")
+function Base.show(io::IO, M::EtcdExecutorMeta)
+    print(io, "EtcdExecutorMeta(", M.path, ")")
 end
 
-function init(M::EtcdSchedMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
+function init(M::EtcdExecutorMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.brokerid = brokerid
     M.start_index = _determine_start_index(M.cli, M.path)
     M.add_annotation = add_annotation
@@ -66,7 +66,7 @@ function _determine_start_index(cli::Etcd.Client, path::String)
     end
 end
 
-function wait_trigger(M::EtcdSchedMeta; timeoutsec::Int=5)
+function wait_trigger(M::EtcdExecutorMeta; timeoutsec::Int=5)
     fire = true
     if !isready(M.trigger)
         @schedule begin
@@ -80,7 +80,7 @@ function wait_trigger(M::EtcdSchedMeta; timeoutsec::Int=5)
     nothing
 end
 
-function delete!(M::EtcdSchedMeta)
+function delete!(M::EtcdExecutorMeta)
     reset(M)
     try
         Etcd.deletedir(M.cli, M.path, recursive=true)
@@ -88,7 +88,7 @@ function delete!(M::EtcdSchedMeta)
     nothing
 end
 
-function reset(M::EtcdSchedMeta)
+function reset(M::EtcdExecutorMeta)
     for (key,task) in M.watches
         timedwait(()->istaskdone(task), 5.)
         if !istaskdone(task)
@@ -113,13 +113,13 @@ function reset(M::EtcdSchedMeta)
     nothing
 end
 
-function cleanup(M::EtcdSchedMeta)
+function cleanup(M::EtcdExecutorMeta)
     try
         Etcd.deletedir(M.cli, M.path, recursive=true)
     end
 end
 
-function share_task(M::EtcdSchedMeta, id::TaskIdType, allow_dup::Bool)
+function share_task(M::EtcdExecutorMeta, id::TaskIdType, allow_dup::Bool)
     s = sharepath(M, id)
     last_index = M.start_index
 
@@ -142,7 +142,7 @@ function share_task(M::EtcdSchedMeta, id::TaskIdType, allow_dup::Bool)
     nothing
 end
 
-function _get_shared_tasks(M::EtcdSchedMeta)
+function _get_shared_tasks(M::EtcdExecutorMeta)
     k = taskpath(M)
     last_index = M.start_index
     res = Vector{Pair{String,TaskIdType}}()
@@ -171,13 +171,13 @@ function _remove_from_tasklist(tasklist::Vector{Pair{String,TaskIdType}}, tpath:
     nothing
 end
 
-function steal_task(M::EtcdSchedMeta)
+function steal_task(M::EtcdExecutorMeta)
     tasklist = M.tasklist
     while !isempty(tasklist)
         tpath, taskid = tasklist[1]
         try
             resp = delete(M.cli, tpath)
-            last_index = resp["node"]["modifiedIndex"]
+            #last_index = resp["node"]["modifiedIndex"]
             taskid = M.del_annotation(taskid)
             _remove_from_tasklist(tasklist, tpath)
             return taskid
@@ -192,11 +192,11 @@ function steal_task(M::EtcdSchedMeta)
     NoTask
 end
 
-function _watchloop_end_cond(M::EtcdSchedMeta, resp)
+function _watchloop_end_cond(M::EtcdExecutorMeta, resp)
     (resp["action"] == "delete") && (resp["node"]["key"] == M.path)
 end
 
-function _wait_shared_task(f::Function, M::EtcdSchedMeta; wait_index::Int=(M.start_index+1))
+function _wait_shared_task(f::Function, M::EtcdExecutorMeta; wait_index::Int=(M.start_index+1))
     _purge_completed_watches(M)
     k = taskpath(M)
 
@@ -210,7 +210,7 @@ function _wait_shared_task(f::Function, M::EtcdSchedMeta; wait_index::Int=(M.sta
     nothing
 end
 
-function _track_results(M::EtcdSchedMeta; wait_index::Int=(M.start_index+1))
+function _track_results(M::EtcdExecutorMeta; wait_index::Int=(M.start_index+1))
     _purge_completed_watches(M)
     k = resultroot(M)
 
@@ -230,7 +230,7 @@ function _track_results(M::EtcdSchedMeta; wait_index::Int=(M.start_index+1))
     nothing
 end
 
-function _create_delete_shared_task(M::EtcdSchedMeta, action::String, key::String, val::TaskIdType)
+function _create_delete_shared_task(M::EtcdExecutorMeta, action::String, key::String, val::TaskIdType)
     if key != M.path
         if action == "create"
             taskid = M.del_annotation(val)
@@ -253,7 +253,7 @@ function _create_delete_shared_task(M::EtcdSchedMeta, action::String, key::Strin
     nothing
 end
 
-function _track_shared_tasks(M::EtcdSchedMeta)
+function _track_shared_tasks(M::EtcdExecutorMeta)
     # get the contents one time
     tasks, last_index = _get_shared_tasks(M)
     for (key,val) in tasks
@@ -266,7 +266,7 @@ function _track_shared_tasks(M::EtcdSchedMeta)
     end
 end
 
-function set_result(M::EtcdSchedMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
+function set_result(M::EtcdExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
     k = resultpath(M, id)
     M.proclocal[k] = val
     processlocal || set(M.cli, k, meta_ser((val,refcount)))
@@ -274,7 +274,7 @@ function set_result(M::EtcdSchedMeta, id::TaskIdType, val; refcount::UInt64=UInt
     nothing
 end
 
-function get_result(M::EtcdSchedMeta, id::TaskIdType)
+function get_result(M::EtcdExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
     if k in keys(M.proclocal)
         M.proclocal[k]
@@ -286,11 +286,11 @@ function get_result(M::EtcdSchedMeta, id::TaskIdType)
     end
 end
 
-function has_result(M::EtcdSchedMeta, id::TaskIdType)
+function has_result(M::EtcdExecutorMeta, id::TaskIdType)
     id in M.donetasks
 end
 
-function decr_result_ref(M::EtcdSchedMeta, id::TaskIdType)
+function decr_result_ref(M::EtcdExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
     while true
         resp = get(M.cli, k)
@@ -312,7 +312,7 @@ function decr_result_ref(M::EtcdSchedMeta, id::TaskIdType)
     end
 end
 
-function _purge_completed_watches(M::EtcdSchedMeta)
+function _purge_completed_watches(M::EtcdExecutorMeta)
     #=
     for (n,v) in M.watches
         if istaskdone(v)
@@ -327,7 +327,7 @@ function _purge_completed_watches(M::EtcdSchedMeta)
     filter!((n,v)->!istaskdone(v), M.watches)
 end
 
-function export_local_result(M::EtcdSchedMeta, id::TaskIdType, executable, refcount::UInt64)
+function export_local_result(M::EtcdExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
     exists(M.cli, k) && return

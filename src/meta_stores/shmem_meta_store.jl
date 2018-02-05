@@ -4,7 +4,7 @@ const MAP_SZ = 1000^3              # size of shared dict for results and ref cou
 const DONE_TASKS_SZ = 1024*100     # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))
 const SHARED_TASKS_SZ = 1024*100   # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))
 
-mutable struct ShmemSchedMeta <: SchedMeta
+mutable struct ShmemExecutorMeta <: ExecutorMeta
     path::String
     brokerid::Int
     env::Environment
@@ -20,7 +20,7 @@ mutable struct ShmemSchedMeta <: SchedMeta
     result_callback_pos::Int
     result_callback::Union{Function,Void}
 
-    function ShmemSchedMeta(path::String, sharethreshold::Int)
+    function ShmemExecutorMeta(path::String, sharethreshold::Int)
         path = joinpath("/dev/shm", startswith(path, '/') ? path[2:end] : path)
         isdir(path) || mkpath(path)
         env = LMDB.create()
@@ -52,17 +52,17 @@ mutable struct ShmemSchedMeta <: SchedMeta
     end
 end
 
-donetaskspath(M::ShmemSchedMeta) = donetaskspath(M.path)
+donetaskspath(M::ShmemExecutorMeta) = donetaskspath(M.path)
 donetaskspath(path::String) = joinpath(path, "tasks.done")
-sharedtaskspath(M::ShmemSchedMeta) = sharedtaskspath(M.path)
+sharedtaskspath(M::ShmemExecutorMeta) = sharedtaskspath(M.path)
 sharedtaskspath(path::String) = joinpath(path, "tasks.shared")
-allsharedtaskspath(M::ShmemSchedMeta) = allsharedtaskspath(M.path)
+allsharedtaskspath(M::ShmemExecutorMeta) = allsharedtaskspath(M.path)
 allsharedtaskspath(path::String) = joinpath(path, "tasks.allshared")
-sharedcounterpath(M::ShmemSchedMeta) = sharedcounterpath(M.path)
+sharedcounterpath(M::ShmemExecutorMeta) = sharedcounterpath(M.path)
 sharedcounterpath(path::String) = joinpath(path, "counter")
 lmdbpath(path::String) = joinpath(path, "lmdb")
 
-function init(M::ShmemSchedMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
+function init(M::ShmemExecutorMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.brokerid = brokerid
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
@@ -71,7 +71,7 @@ function init(M::ShmemSchedMeta, brokerid::Int; add_annotation=identity, del_ann
     nothing
 end
 
-function sync_sharemode(M::ShmemSchedMeta)
+function sync_sharemode(M::ShmemExecutorMeta)
     created, deleted = count(M.sharedcounter)
     if created < deleted
         created = deleted
@@ -83,7 +83,7 @@ function sync_sharemode(M::ShmemSchedMeta)
     nothing
 end
 
-function wait_trigger(M::ShmemSchedMeta; timeoutsec::Int=5)
+function wait_trigger(M::ShmemExecutorMeta; timeoutsec::Int=5)
     trigger = M.trigger
     fire = true
     if !isready(trigger)
@@ -100,12 +100,12 @@ function wait_trigger(M::ShmemSchedMeta; timeoutsec::Int=5)
     nothing
 end
 
-function pull_trigger(M::ShmemSchedMeta)
+function pull_trigger(M::ShmemExecutorMeta)
     brokercall(broker_ping, M)
     nothing
 end
 
-function invoke_result_callbacks(M::ShmemSchedMeta)
+function invoke_result_callbacks(M::ShmemExecutorMeta)
     L = withlock(M.donetasks.lck) do
         length(M.donetasks)
     end
@@ -118,7 +118,7 @@ function invoke_result_callbacks(M::ShmemSchedMeta)
     nothing
 end
 
-function delete!(M::ShmemSchedMeta)
+function delete!(M::ShmemExecutorMeta)
     empty!(M.donetasks)
     empty!(M.sharedtasks)
     empty!(M.allsharedtasks)
@@ -139,7 +139,7 @@ function delete!(M::ShmemSchedMeta)
     nothing
 end
 
-function reset(M::ShmemSchedMeta; delete::Bool=false, dropdb::Bool=true)
+function reset(M::ShmemExecutorMeta; delete::Bool=false, dropdb::Bool=true)
     empty!(M.proclocal)
     DagScheduler.reset(M.sharemode)
     M.add_annotation = identity
@@ -149,7 +149,7 @@ function reset(M::ShmemSchedMeta; delete::Bool=false, dropdb::Bool=true)
     nothing
 end
 
-function cleanup(M::ShmemSchedMeta)
+function cleanup(M::ShmemExecutorMeta)
     delete!(M.allsharedtasks)
     delete!(M.sharedtasks)
     delete!(M.donetasks)
@@ -158,7 +158,7 @@ function cleanup(M::ShmemSchedMeta)
     nothing
 end
 
-function share_task(M::ShmemSchedMeta, id::TaskIdType, allow_dup::Bool)
+function share_task(M::ShmemExecutorMeta, id::TaskIdType, allow_dup::Bool)
     canshare = false
     withlock(M.allsharedtasks.lck) do
         if !(id in M.allsharedtasks)
@@ -181,7 +181,7 @@ function share_task(M::ShmemSchedMeta, id::TaskIdType, allow_dup::Bool)
     nothing
 end
 
-function steal_task(M::ShmemSchedMeta)
+function steal_task(M::ShmemExecutorMeta)
     task = NoTask
     withlock(M.sharedtasks.lck) do
         isempty(M.sharedtasks) || (task = shift!(M.sharedtasks))
@@ -195,7 +195,7 @@ function steal_task(M::ShmemSchedMeta)
     task
 end
 
-function set_result(M::ShmemSchedMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
+function set_result(M::ShmemExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
     k = resultpath(M, id)
     M.proclocal[k] = val
 
@@ -223,7 +223,7 @@ function set_result(M::ShmemSchedMeta, id::TaskIdType, val; refcount::UInt64=UIn
     nothing
 end
 
-function get_result(M::ShmemSchedMeta, id::TaskIdType)
+function get_result(M::ShmemExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
     if k in keys(M.proclocal)
         M.proclocal[k]
@@ -243,7 +243,7 @@ function get_result(M::ShmemSchedMeta, id::TaskIdType)
     end
 end
 
-function has_result(M::ShmemSchedMeta, id::TaskIdType)
+function has_result(M::ShmemExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) && (return true)
 
@@ -252,7 +252,7 @@ function has_result(M::ShmemSchedMeta, id::TaskIdType)
     end
 end
 
-function decr_result_ref(M::ShmemSchedMeta, id::TaskIdType)
+function decr_result_ref(M::ShmemExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
 
     txn = start(M.env)
@@ -275,7 +275,7 @@ function decr_result_ref(M::ShmemSchedMeta, id::TaskIdType)
     end
 end
 
-function export_local_result(M::ShmemSchedMeta, id::TaskIdType, executable, refcount::UInt64)
+function export_local_result(M::ShmemExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
 

@@ -1,9 +1,9 @@
 # scheduler metadata store
 # -------------------------
 # Used to share metadata among processes in a node (result and refcount).
-# It would be possible to switch between different implementations of SchedMeta.
+# It would be possible to switch between different implementations of ExecutorMeta.
 
-abstract type SchedMeta end
+abstract type ExecutorMeta end
 
 
 """
@@ -80,26 +80,26 @@ function brokercall(fn, M, args...)
     result
 end
 
-resultroot{T<:SchedMeta}(M::T) = joinpath(M.path, "result")
-resultpath{T<:SchedMeta}(M::T, id::TaskIdType) = joinpath(resultroot(M), string(id))
-sharepath{T<:SchedMeta}(M::T, id::TaskIdType) = joinpath(M.path, "shared", string(id))
-taskpath{T<:SchedMeta}(M::T) = joinpath(M.path, "broker", string(M.brokerid))
+resultroot{T<:ExecutorMeta}(M::T) = joinpath(M.path, "result")
+resultpath{T<:ExecutorMeta}(M::T, id::TaskIdType) = joinpath(resultroot(M), string(id))
+sharepath{T<:ExecutorMeta}(M::T, id::TaskIdType) = joinpath(M.path, "shared", string(id))
+taskpath{T<:ExecutorMeta}(M::T) = joinpath(M.path, "broker", string(M.brokerid))
 
-should_share{T<:SchedMeta}(M::T) = should_share(M.sharemode)
-should_share{T<:SchedMeta}(M::T, nreserved::Int) = should_share(M.sharemode, nreserved)
+should_share{T<:ExecutorMeta}(M::T) = should_share(M.sharemode)
+should_share{T<:ExecutorMeta}(M::T, nreserved::Int) = should_share(M.sharemode, nreserved)
 
-init{T<:SchedMeta}(M::T, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing) = error("method not implemented for $T")
-wait_trigger{T<:SchedMeta}(M::T; timeoutsec::Int=5) = error("method not implemented for $T")
-delete!{T<:SchedMeta}(M::T) = error("method not implemented for $T")
-reset{T<:SchedMeta}(M::T) = error("method not implemented for $T")
-cleanup{T<:SchedMeta}(M::T) = error("method not implemented for $T")
-share_task{T<:SchedMeta}(M::T, id::TaskIdType, allow_dup::Bool) = error("method not implemented for $T")
-steal_task{T<:SchedMeta}(M::T) = error("method not implemented for $T")
-set_result{T<:SchedMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
-get_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
-has_result{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
-decr_result_ref{T<:SchedMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
-export_local_result{T<:SchedMeta}(M::T, id::TaskIdType, executable, refcount::UInt64) = error("method not implemented for $T")
+init{T<:ExecutorMeta}(M::T, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing) = error("method not implemented for $T")
+wait_trigger{T<:ExecutorMeta}(M::T; timeoutsec::Int=5) = error("method not implemented for $T")
+delete!{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
+reset{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
+cleanup{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
+share_task{T<:ExecutorMeta}(M::T, id::TaskIdType, allow_dup::Bool) = error("method not implemented for $T")
+steal_task{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
+set_result{T<:ExecutorMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
+get_result{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
+has_result{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
+decr_result_ref{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
+export_local_result{T<:ExecutorMeta}(M::T, id::TaskIdType, executable, refcount::UInt64) = error("method not implemented for $T")
 
 function get_type(s::String)
     T = Main
@@ -122,12 +122,12 @@ using LMDB
 import LMDB: MDBValue, close
 
 import ..DagScheduler
-import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask, BcastChannel,
+import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall
 
-export ShmemSchedMeta
+export ShmemExecutorMeta
 
 const pinger = BcastChannel{Void}()
 
@@ -141,12 +141,12 @@ module EtcdMeta
 using Etcd
 
 import ..DagScheduler
-import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask,
+import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export
 
-export EtcdSchedMeta
+export EtcdExecutorMeta
 
 include("etcd_meta_store.jl")
 
@@ -158,12 +158,12 @@ module SimpleMeta
 using Base.Threads
 
 import ..DagScheduler
-import ..DagScheduler: TaskIdType, SchedMeta, ShareMode, NoTask, BcastChannel,
+import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall
 
-export SimpleSchedMeta
+export SimpleExecutorMeta
 
 const Results = BcastChannel{Tuple{String,String}}
 
