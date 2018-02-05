@@ -1,42 +1,6 @@
-mutable struct NodeEnv
-    brokerid::UInt64
-    broker_task::Union{Future,Void}
-    executorids::Vector{UInt64}
-    executor_tasks::Vector{Future}
-    last_task_stat::Vector{Tuple{UInt64,Future}}
-    reset_task::Union{Task,Void}
-
-    function NodeEnv(brokerid::Integer, executorids::Vector{Int})
-        new(brokerid, nothing, executorids, Vector{Future}(), Vector{Tuple{UInt64,Future}}(), nothing)
-    end
-end
-
-mutable struct RunEnv
-    rootpath::String
-    masterid::UInt64
-    nodes::Vector{NodeEnv}
-    reset_task::Union{Task,Void}
-    debug::Bool
-
-    function RunEnv(; rootpath::String="/dagscheduler", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,workers())], debug::Bool=false)
-        nexecutors = 0
-        for node in nodes
-            nw = length(node.executorids)
-            (nw > 1) || error("need at least two workers on each node")
-            nexecutors += nw
-        end
-        (nexecutors > 1) || error("need at least two workers")
-
-        # ensure clean paths
-        delete_meta(UInt64(masterid), nodes, rootpath)
-
-        @everywhere MemPool.enable_who_has_read[] = false
-        @everywhere Dagger.use_shared_array[] = false
-
-        new(rootpath, masterid, nodes, nothing, debug)
-    end
-end
-
+#------------------------------------------------------------------
+# helper methods for the executor
+#------------------------------------------------------------------
 function wait_for_executors(runenv::RunEnv)
     @sync for node in runenv.nodes
         @async begin
@@ -123,8 +87,8 @@ end
 #------------------------------------------------------------------
 # per process execution engine context
 #------------------------------------------------------------------
-const genv = Ref{Union{Sched,Void}}(nothing)
-const upstream_genv = Ref{Union{Sched,Void}}(nothing)
+const genv = Ref{Union{ExecutionCtx,Void}}(nothing)
+const upstream_genv = Ref{Union{ExecutionCtx,Void}}(nothing)
 const join_count = Ref(0)
 const start_cond = Channel{Void}(1)
 
@@ -166,7 +130,7 @@ function local_result_to_upstream(upenv, task, res)
     nothing
 end
 
-function unify_trigger(env::Sched, root::TaskIdType, unified_trigger::Channel{Void}, do_trigger::Ref{Bool})
+function unify_trigger(env::ExecutionCtx, root::TaskIdType, unified_trigger::Channel{Void}, do_trigger::Ref{Bool})
     while !has_result(env.meta, root)
         wait_trigger(env.meta)
         isready(unified_trigger) || put!(unified_trigger, nothing)
@@ -176,7 +140,7 @@ function unify_trigger(env::Sched, root::TaskIdType, unified_trigger::Channel{Vo
     nothing
 end
 
-function broker_tasks(upenv::Sched, env::Sched, unified_trigger::Channel{Void}, do_trigger::Ref{Bool})
+function broker_tasks(upenv::ExecutionCtx, env::ExecutionCtx, unified_trigger::Channel{Void}, do_trigger::Ref{Bool})
     try
         last_upstream = last_downstream = 0.0
         while do_trigger[]
@@ -237,15 +201,15 @@ end
 #--------------------------------------------------------------------
 function runbroker(rootpath::String, id::UInt64, upstream_brokerid::UInt64, root_t; debug::Bool=false, upstream_help_threshold::Int=typemax(Int), downstream_help_threshold::Int=typemax(Int))
     if genv[] === nothing
-        env = genv[] = Sched(META_IMPL[:node], rootpath, id, id, :broker, downstream_help_threshold; debug=debug)
+        env = genv[] = ExecutionCtx(META_IMPL[:node], rootpath, id, id, :broker, downstream_help_threshold; debug=debug)
     else
-        env = (genv[])::Sched
+        env = (genv[])::ExecutionCtx
     end
 
     if upstream_genv[] === nothing
-        upenv = upstream_genv[] = Sched(META_IMPL[:cluster], rootpath, id, upstream_brokerid, :executor, upstream_help_threshold; debug=debug)
+        upenv = upstream_genv[] = ExecutionCtx(META_IMPL[:cluster], rootpath, id, upstream_brokerid, :executor, upstream_help_threshold; debug=debug)
     else
-        upenv = (upstream_genv[])::Sched
+        upenv = (upstream_genv[])::ExecutionCtx
     end
 
     env.debug = debug
@@ -288,9 +252,9 @@ end
 #--------------------------------------------------------------------
 function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
     if genv[] === nothing
-        env = genv[] = Sched(META_IMPL[:cluster], rootpath, id, brokerid, :master, typemax(Int); debug=debug)
+        env = genv[] = ExecutionCtx(META_IMPL[:cluster], rootpath, id, brokerid, :master, typemax(Int); debug=debug)
     else
-        env = (genv[])::Sched
+        env = (genv[])::ExecutionCtx
     end
     env.debug = debug
     init(env, root_t)
@@ -322,9 +286,9 @@ end
 
 function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, masterid::UInt64, root_t; debug::Bool=false, help_threshold::Int=typemax(Int))
     if genv[] === nothing
-        env = genv[] = Sched(META_IMPL[:node], rootpath, id, brokerid, :executor, help_threshold; debug=debug)
+        env = genv[] = ExecutionCtx(META_IMPL[:node], rootpath, id, brokerid, :executor, help_threshold; debug=debug)
     else
-        env = (genv[])::Sched
+        env = (genv[])::ExecutionCtx
     end
     env.debug = debug
     tasklog(env, "starting")

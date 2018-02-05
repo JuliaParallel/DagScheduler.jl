@@ -21,10 +21,9 @@ const META_IMPL = Dict(
 
 include("common.jl")
 include("bcast_channel.jl")
-include("meta_store.jl")
-include("task_queue.jl")
-include("tasks.jl")
-
-include("simple_meta_store.jl")
+include("meta_stores/meta_store.jl")
+include("scheduler.jl")
+include("execution/queue.jl")
+include("execution/engine.jl")
 
 end # module

@@ -1,4 +1,4 @@
-mutable struct Sched
+mutable struct ExecutionCtx
     id::UInt64                                  # component id
     brokerid::UInt64                            # broker id
     rootpath::String                            # root path identifying the run
@@ -16,7 +16,7 @@ mutable struct Sched
     taskidmap::Dict{TaskIdType,Thunk}           # for quick lookup
     debug::Bool                                 # switch on debug logging
 
-    function Sched(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
+    function ExecutionCtx(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
         broker_rootpath = joinpath(rootpath, string(brokerid))
         new(id, brokerid, rootpath, role,
             metastore(metastore_impl, broker_rootpath, help_threshold),
@@ -30,35 +30,35 @@ end
 
 # enqueue can enqueue either to the reserved or shared section
 # enqueuing to shared section is done under lock
-function enqueue(stack::Sched, task::TaskIdType, isreserved::Bool, allow_dup::Bool=false)
+function enqueue(env::ExecutionCtx, task::TaskIdType, isreserved::Bool, allow_dup::Bool=false)
     if isreserved
-        enqueue(stack.reserved, task)
+        enqueue(env.reserved, task)
     else
-        stack.nshared += 1
-        share(stack, task, allow_dup)
+        env.nshared += 1
+        share(env, task, allow_dup)
     end
 end
 
 const FLG_TASK_EXPANDED = TaskIdType(1 << 30) # we use the lower bits for task id and few higher bits for task state flags
 
-function task_annotation(stack::Sched, task::TaskIdType, addmode::Bool)
+function task_annotation(env::ExecutionCtx, task::TaskIdType, addmode::Bool)
     if task !== NoTask
         if addmode
-            if task in stack.expanded
+            if task in env.expanded
                 task |= FLG_TASK_EXPANDED
             end
         else
             if (task & FLG_TASK_EXPANDED) == FLG_TASK_EXPANDED
                 task &= TaskIdType(~FLG_TASK_EXPANDED)
-                push!(stack.expanded, task)
+                push!(env.expanded, task)
             end
         end
     end
     task
 end
 
-function share(stack::Sched, task::TaskIdType, allow_dup::Bool=false)
-    share_task(stack.meta, task, allow_dup)
+function share(env::ExecutionCtx, task::TaskIdType, allow_dup::Bool=false)
+    share_task(env.meta, task, allow_dup)
     task
 end
 function enqueue(reserved::Vector{TaskIdType}, task::TaskIdType)
@@ -72,21 +72,21 @@ function enqueue(reserved::Vector{TaskIdType}, task::TaskIdType)
     task
 end
 
-function dequeue(stack::Sched, task::TaskIdType)
-    idx = findlast(stack.reserved, task)
-    (idx > 0) && splice!(stack.reserved, idx)
+function dequeue(env::ExecutionCtx, task::TaskIdType)
+    idx = findlast(env.reserved, task)
+    (idx > 0) && splice!(env.reserved, idx)
     nothing
 end
 
-should_share(stack::Sched) = should_share(stack.meta)
-should_share(stack::Sched, nreserved::Int) = should_share(stack.meta, nreserved)
+should_share(env::ExecutionCtx) = should_share(env.meta)
+should_share(env::ExecutionCtx, nreserved::Int) = should_share(env.meta, nreserved)
 
-function async_reset(env::Sched)
+function async_reset(env::ExecutionCtx)
     env.reset_task = @schedule reset(env)
     nothing
 end
 
-function reset(env::Sched)
+function reset(env::ExecutionCtx)
     reset(env.meta)
     empty!(env.reserved)
     empty!(env.stolen)
@@ -100,7 +100,7 @@ function reset(env::Sched)
     nothing
 end
 
-function init(env::Sched, task::Thunk; result_callback=nothing)
+function init(env::ExecutionCtx, task::Thunk; result_callback=nothing)
     if env.reset_task !== nothing
         try
             wait(env.reset_task)
@@ -118,10 +118,10 @@ function init(env::Sched, task::Thunk; result_callback=nothing)
     nothing
 end
 
-get_executable(env::Sched, task::TaskIdType) = env.taskidmap[task]
+get_executable(env::ExecutionCtx, task::TaskIdType) = env.taskidmap[task]
 
-keep(env::Sched, executable::Thunk, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
-function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true, executable::Any=nothing)
+keep(env::ExecutionCtx, executable::Thunk, depth::Int=1, isreserved::Bool=true) = keep(env, taskid(executable), depth, isreserved, executable)
+function keep(env::ExecutionCtx, task::TaskIdType, depth::Int=1, isreserved::Bool=true, executable::Any=nothing)
     #tasklog(env, "in keep for task ", task, " depth ", depth)
     has_result(env.meta, task) && (return true)
 
@@ -149,7 +149,7 @@ function keep(env::Sched, task::TaskIdType, depth::Int=1, isreserved::Bool=true,
 end
 
 #=
-function stolen_task_input_watchlist(env::Sched, task::TaskIdType)
+function stolen_task_input_watchlist(env::ExecutionCtx, task::TaskIdType)
     dependents = Vector{TaskIdType}()
 
     if task in env.expanded
@@ -165,7 +165,7 @@ function stolen_task_input_watchlist(env::Sched, task::TaskIdType)
     dependents
 end
 =#
-function steal(env::Sched)
+function steal(env::ExecutionCtx)
     task = steal_task(env.meta)
     if task !== NoTask
         push!(env.stolen, task)
@@ -174,10 +174,10 @@ function steal(env::Sched)
     task
 end
 
-was_stolen(env::Sched, task::TaskIdType) = task in env.stolen
+was_stolen(env::ExecutionCtx, task::TaskIdType) = task in env.stolen
 
-inputs_available(env::Sched, task::TaskIdType) = inputs_available(env, get_executable(env, task))
-function inputs_available(env::Sched, executable::Thunk)
+inputs_available(env::ExecutionCtx, task::TaskIdType) = inputs_available(env, get_executable(env, task))
+function inputs_available(env::ExecutionCtx, executable::Thunk)
     for inp in inputs(executable)
         if istask(inp)
             has_result(env.meta, taskid(inp)) || (return false)
@@ -186,7 +186,7 @@ function inputs_available(env::Sched, executable::Thunk)
     true
 end
 
-function runnable(env::Sched, task::TaskIdType)
+function runnable(env::ExecutionCtx, task::TaskIdType)
     has_result(env.meta, task) && return true
     t = get_executable(env, task)
     istask(t) ? inputs_available(env, t) : true
@@ -194,7 +194,7 @@ end
 
 # select a task from the reserved queue and mark it as being executed
 # returns NoTask if no runnable task is found
-function reserve(env::Sched)
+function reserve(env::ExecutionCtx)
     data = env.reserved
     #tasklog(env, "reserving from ", join(map(x->string(x.id), data), ", "))
     L = length(data)
@@ -227,11 +227,11 @@ function reserve(env::Sched)
     restask
 end
 
-function release(env::Sched, task::TaskIdType, complete::Bool)
+function release(env::ExecutionCtx, task::TaskIdType, complete::Bool)
     complete && dequeue(env, task)
 end
 
-function reserve_to_share(env::Sched)
+function reserve_to_share(env::ExecutionCtx)
     data = env.reserved
     #tasklog(env, "reserving from ", join(map(x->string(x.id), data), ", "))
     L = length(data)
@@ -272,13 +272,13 @@ function reserve_to_share(env::Sched)
     nothing
 end
 
-_collect(env::Sched, x::Chunk, c::Bool) = c ? collect(x) : x
-function _collect(env::Sched, x::Thunk, c::Bool=true)
+_collect(env::ExecutionCtx, x::Chunk, c::Bool) = c ? collect(x) : x
+function _collect(env::ExecutionCtx, x::Thunk, c::Bool=true)
     res = get_result(env.meta, taskid(x))
     (isa(res, Chunk) && c) ? collect(res) : res
 end
-_collect(env::Sched, x, _c::Bool) = x
-function exec(env::Sched, task::TaskIdType)
+_collect(env::ExecutionCtx, x, _c::Bool) = x
+function exec(env::ExecutionCtx, task::TaskIdType)
     has_result(env.meta, task) && (return true)
 
     # run the task
