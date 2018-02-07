@@ -13,7 +13,7 @@ mutable struct SimpleExecutorMeta <: ExecutorMeta
     donetasks::Set{TaskIdType}
     sharemode::ShareMode
     results_channel::Union{Void,RemoteChannel{Channel{Tuple{String,String}}}}
-    gen::Float64
+    gen::Int
     add_annotation::Function
     del_annotation::Function
     result_callback::Union{Function,Void}
@@ -23,7 +23,7 @@ mutable struct SimpleExecutorMeta <: ExecutorMeta
             Dict{String,Any}(),
             Set{TaskIdType}(),
             ShareMode(sharethreshold),
-            nothing, time(),
+            nothing, 0,
             identity, identity, nothing)
     end
 end
@@ -34,6 +34,7 @@ end
 
 function init(M::SimpleExecutorMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.brokerid = brokerid
+    M.gen = 0
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
     M.result_callback = result_callback
@@ -47,10 +48,12 @@ function process_trigger(M::SimpleExecutorMeta, k::String, v::String)
     if k == TIMEOUT_KEY
         # ignore
     elseif k == SHAREMODE_KEY
-        nshared,ncreated,ndeleted = meta_deser(v)
-        M.sharemode.nshared = nshared
-        M.sharemode.ncreated = ncreated
-        M.sharemode.ndeleted = ndeleted
+        ncreated,ndeleted = meta_deser(v)
+        if (ncreated > M.sharemode.ncreated) || (ndeleted > M.sharemode.ndeleted)
+            M.sharemode.nshared = ncreated - ndeleted
+            M.sharemode.ncreated = ncreated
+            M.sharemode.ndeleted = ndeleted
+        end
     else
         val, refcount = meta_deser(v)
         M.proclocal[k] = val
@@ -107,6 +110,7 @@ function reset(M::SimpleExecutorMeta)
     M.add_annotation = identity
     M.del_annotation = identity
     M.result_callback = nothing
+    M.gen = 0
     
     nothing
 end
@@ -229,12 +233,13 @@ function broker_steal_task()
 end
 
 function broker_send_sharestats(M)
-    sm = M.sharemode
     gen = M.gen
     @schedule begin
         if M.gen <= gen
-            put!(RESULTS, (SHAREMODE_KEY, meta_ser((sm.nshared,sm.ncreated,sm.ndeleted))))
-            M.gen = time()
+            M.gen = gen + 1
+            sm = M.sharemode
+            c,d = sm.ncreated,sm.ndeleted
+            put!(RESULTS, (SHAREMODE_KEY, meta_ser((c,d))))
         end
     end
     nothing

@@ -13,7 +13,6 @@ end
 node1 = NodeEnv(2, [3,4,5])
 node2 = NodeEnv(6, [7,8,9])
 runenv = RunEnv(; nodes=[node1,node2])
-#runenv.debug=true
 
 @testset "deep dag" begin
     info("Testing deep dag...")
@@ -22,14 +21,13 @@ runenv = RunEnv(; nodes=[node1,node2])
     info("result = ", result)
     @test result == 1
     DagScheduler.print_stats(runenv)
-#=
+
     info("Testing cross connected dag...")
     dag3 = gen_cross_dag()
     result = collect(rundag(runenv, dag3))
     info("result = ", result)
     @test result == 84
     DagScheduler.print_stats(runenv)
-=#
 end
 
 @testset "sorting" begin
@@ -44,7 +42,7 @@ end
         @test length(result) == L
         @everywhere MemPool.cleanup()
         DagScheduler.print_stats(runenv)
-#=
+
         # for cross dag
         dag4 = gen_sort_dag(L, 40, 4, 40)
         result = collect(rundag(runenv, dag4))
@@ -55,7 +53,6 @@ end
         @test length(fullresult) == L
         @everywhere MemPool.cleanup()
         DagScheduler.print_stats(runenv)
-=#
     end
 end
 

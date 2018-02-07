@@ -109,7 +109,7 @@ function init(env::ExecutionCtx, task::Thunk; result_callback=nothing)
     end
     env.dag_root = task
     Dagger.dependents(task, env.dependents)
-    walk_dag(task, x->(isa(x, Thunk) && (env.taskidmap[x.id] = x); nothing), false)
+    walk_dag(task, (x,d)->(isa(x, Thunk) && (env.taskidmap[x.id] = x); nothing), false)
 
     init(env.meta, Int(env.brokerid);
         add_annotation=(id)->task_annotation(env, id, true),
@@ -304,6 +304,7 @@ function exec(env::ExecutionCtx, task::TaskIdType)
         set_result(env.meta, task, res)
     end
 
+    #=
     # clean up task inputs, we don't need them anymore
     if istask(t)
         for (inp, ires) in zip(t.inputs, map(x->_collect(env,x,false), inputs(t)))
@@ -312,6 +313,7 @@ function exec(env::ExecutionCtx, task::TaskIdType)
             (refcount == 0) && try pooldelete(ires.handle) end
         end
     end
+    =#
     env.nexecuted += 1
     true
 end
