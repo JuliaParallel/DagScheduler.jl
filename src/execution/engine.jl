@@ -156,6 +156,7 @@ function broker_tasks(upenv::ExecutionCtx, env::ExecutionCtx, unified_trigger::C
 
             tasklog(env, "nshared up,down = $(upstat.nshared),$(downstat.nshared)")
             tasklog(env, "ncreated up,down = $(upstat.ncreated),$(downstat.ncreated)")
+            tasklog(env, "ndeleted up,down = $(upstat.ndeleted),$(downstat.ndeleted)")
             tasklog(env, "should_share up,down = $(needed_upstream),$(needed_downstream)")
 
             if from_upstream
@@ -250,6 +251,27 @@ end
 # broker provides the initial tasks and coordinates among executors
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
+function master_schedule(env, execstages, scheduled, completed)
+    tasklog(env, "scheduling $(length(execstages)) entries")
+    isempty(execstages) || filter!((task)->!(taskid(task) in scheduled), execstages)
+
+    if !isempty(execstages)
+        schedulable = Vector{Tuple{Int,TaskIdType}}()
+        for task in execstages
+            filter!(x->(isa(x, Thunk) && !(taskid(x) in completed)), task)
+            walk_dag(task, (x,d)->(!(taskid(x) in scheduled) && isempty(x.inputs) && push!(schedulable, (d,taskid(x)))), false)
+        end
+        tasklog(env, "found $(length(schedulable)) schedulable tasks")
+        for (d,tid) in sort!(schedulable; lt=(x,y)->isless(x[1], y[1]), rev=true)
+            if !(tid in scheduled)
+                keep(env, tid, 0, false)
+                push!(scheduled, tid)
+            end
+        end
+    end
+    nothing
+end
+
 function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
     if genv[] === nothing
         env = genv[] = ExecutionCtx(META_IMPL[:cluster], rootpath, id, brokerid, :master, typemax(Int); debug=debug)
@@ -257,19 +279,26 @@ function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug
         env = (genv[])::ExecutionCtx
     end
     env.debug = debug
-    init(env, root_t)
-    remotecall_wait(join_cluster, Int(id))
+
+    # determine critical path
+    execstages = execution_stages(root_t)
+    completed = Vector{TaskIdType}()
+    scheduled = Vector{TaskIdType}()
+
+    init(env, root_t; result_callback=(task,res)->push!(completed,task))
     tasklog(env, "invoked")
 
+    remotecall_wait(join_cluster, Int(id))
     take!(start_cond)
     tasklog(env, "all brokers and executors joined cluster")
 
     try
-        task = root = taskid(root_t)
-        keep(env, root_t, 0, false)
-        tasklog(env, "started with ", task)
+        root = taskid(root_t)
+        tasklog(env, "started with ", root)
 
         while !has_result(env.meta, root)
+            # while critical path items exist, process them first
+            master_schedule(env, execstages, scheduled, completed)
             wait_trigger(env.meta)
         end
 

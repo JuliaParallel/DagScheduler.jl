@@ -97,6 +97,7 @@ function wait_trigger(M::ShmemExecutorMeta; timeoutsec::Int=5)
     if M.result_callback !== nothing
         invoke_result_callbacks(M)
     end
+    sync_sharemode(M)
     nothing
 end
 
