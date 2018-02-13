@@ -109,7 +109,10 @@ function init(env::ExecutionCtx, task::Thunk; result_callback=nothing)
     end
     env.dag_root = task
     Dagger.dependents(task, env.dependents)
-    walk_dag(task, (x,d)->(isa(x, Thunk) && (env.taskidmap[x.id] = x); nothing), false)
+    walk_dag(task, false) do x,d
+        isa(x, Thunk) && (env.taskidmap[x.id] = x)
+        nothing
+    end
 
     init(env.meta, Int(env.brokerid);
         add_annotation=(id)->task_annotation(env, id, true),

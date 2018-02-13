@@ -259,7 +259,10 @@ function master_schedule(env, execstages, scheduled, completed)
         schedulable = Vector{Tuple{Int,TaskIdType}}()
         for task in execstages
             filter!(x->(isa(x, Thunk) && !(taskid(x) in completed)), task)
-            walk_dag(task, (x,d)->(!(taskid(x) in scheduled) && isempty(x.inputs) && push!(schedulable, (d,taskid(x)))), false)
+            walk_dag(task, false) do x,d
+                !(taskid(x) in scheduled) && isempty(x.inputs) && push!(schedulable, (d,taskid(x)))
+                nothing
+            end
         end
         tasklog(env, "found $(length(schedulable)) schedulable tasks")
         for (d,tid) in sort!(schedulable; lt=(x,y)->isless(x[1], y[1]), rev=true)
