@@ -5,7 +5,8 @@ using Dagger
 using MemPool
 
 import Dagger: istask, inputs, Chunk
-import Base: delete!, filter!
+import Base: delete!, filter!, +, /, isless
+
 
 export runmaster, runbroker, runexecutor, rundag, RunEnv, NodeEnv, cleanup
 

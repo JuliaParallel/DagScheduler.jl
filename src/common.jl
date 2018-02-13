@@ -45,12 +45,12 @@ get_frefs(dag) = map(chunktodisk, get_drefs(dag))
 
 chunktodisk(chunk) = Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), chunk.persist)
 
-function walk_dag(fn, dag_node, update::Bool, depth::Int=1)
-    if isa(dag_node, Thunk)
+function walk_dag(fn, dag_node, update::Bool, stop_nodes=TaskIdType[], depth::Int=1)
+    if isa(dag_node, Thunk) && !(taskid(dag_node) in stop_nodes)
         if update
-            dag_node.inputs = map(x->walk_dag(fn, x, update, depth+1), dag_node.inputs)
+            dag_node.inputs = map(x->walk_dag(fn, x, update, stop_nodes, depth+1), dag_node.inputs)
         else
-            map(x->walk_dag(fn, x, update, depth+1), dag_node.inputs)
+            map(x->walk_dag(fn, x, update, stop_nodes, depth+1), dag_node.inputs)
         end
     end
     fn(dag_node, depth)
@@ -63,6 +63,29 @@ function filter!(fn, dag_node::Thunk)
     dag_node.inputs = tuple(filter!(fn, collect(dag_node.inputs))...)
     dag_node
 end
+
+function depth(dag_node)
+    let maxd = 1
+        f = (n,d)->begin
+            maxd = max(maxd, d)
+        end
+        walk_dag(f, dag_node, false)
+    end
+end
+
+function find_node(dag_node, id::TaskIdType)
+    let node = nothing
+        f = (n,d)->begin
+            if istask(n) && (taskid(n) === id)
+                node = n
+            end
+            node
+        end
+        walk_dag(f, dag_node, false)
+    end
+end
+
+ischild(dag_node, id::TaskIdType) = (nothing !== find_node(dag_node, id))
 
 persist_chunks!(dag) = walk_dag(dag, true) do node,depth
     if isa(node, Chunk)
