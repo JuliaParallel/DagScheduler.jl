@@ -168,14 +168,13 @@ export SimpleExecutorMeta
 const Results = BcastChannel{Tuple{String,String}}
 
 const META = Dict{String,String}()
-const TASKS = Ref(Channel{TaskIdType}(1024))
+const TASKS = Vector{TaskIdType}()
 const RESULTS = Results()
 const taskmutex = Ref(Mutex())
 
 include("simple_meta_store.jl")
 
 function __init__()
-    TASKS[] = Channel{TaskIdType}(1024)
     taskmutex[] = Mutex()
     nothing
 end
