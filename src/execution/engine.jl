@@ -286,8 +286,7 @@ function runmaster(runenv::RunEnv, id::UInt64, brokerid::UInt64, root_t; debug::
     env.debug = debug
 
     # determine critical path
-    execstages = execution_stages(root_t)
-    extend_stages_by_affinity(runenv, execstages, root_t)
+    execstages = schedule(runenv, root_t)
     completed = Vector{TaskIdType}()
     scheduled = Vector{TaskIdType}()
 

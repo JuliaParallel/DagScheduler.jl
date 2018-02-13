@@ -1,67 +1,12 @@
-mutable struct NodeEnv
-    brokerid::UInt64
-    broker_task::Union{Future,Void}
-    executorids::Vector{UInt64}
-    executor_tasks::Vector{Future}
-    last_task_stat::Vector{Tuple{UInt64,Future}}
+module DefaultScheduler
 
-    function NodeEnv(brokerid::Integer, executorids::Vector{Int})
-        new(brokerid, nothing, executorids, Vector{Future}(), Vector{Tuple{UInt64,Future}}())
-    end
-end
+import ..DagScheduler: Dagger, RunEnv, NodeEnv, Thunk, Chunk, DRef, ComputeCost, TaskIdType, istask,
+        cost_function, taskid, mean_node_capacity, walk_dag, fval, SPLIT_CAPACITY_RATIO, SPLIT_COST_RATIO,
+        find_node
 
-mutable struct RunEnv
-    rootpath::String
-    masterid::UInt64
-    nodes::Vector{NodeEnv}
-    reset_task::Union{Task,Void}
-    debug::Bool
-
-    function RunEnv(; rootpath::String="/dagscheduler", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,workers())], debug::Bool=false)
-        nexecutors = 0
-        for node in nodes
-            nw = length(node.executorids)
-            (nw > 1) || error("need at least two workers on each node")
-            nexecutors += nw
-        end
-        (nexecutors > 1) || error("need at least two workers")
-
-        # ensure clean paths
-        delete_meta(UInt64(masterid), nodes, rootpath)
-
-        @everywhere MemPool.enable_who_has_read[] = false
-        @everywhere Dagger.use_shared_array[] = false
-
-        new(rootpath, masterid, nodes, nothing, debug)
-    end
-end
-
-struct ComputeCost
-    cpu::Float64        # cost of computing
-    net::Float64        # cost of transfering data
-end
-
-fval(c::ComputeCost) = (c.cpu + c.net)
-
-function +(c1::ComputeCost, c2::ComputeCost)
-    ComputeCost(c1.cpu + c2.cpu, c1.net + c2.net)
-end
-+(c1::ComputeCost) = c1
-isless(c1::ComputeCost, c2::ComputeCost) = fval(c1) < fval(c2)
-/(c1::ComputeCost, c2::ComputeCost) = fval(c1) / fval(c2)
-
-# here is where the network cost can be adjusted to account for the computation that this Thunk does
-# if it is a reduction step, apply the reduction before summing the input costs
-cost_function(t::Thunk) = sum
-
-# consider splitting node for scheduling only if there is no clear association with any node
-const SPLIT_COST_RATIO = 1.5
-# consider splitting node for scheduling only if the compute cost is substantial
-const SPLIT_CAPACITY_RATIO = 0.5
-
-mean_node_capacity(runenv::RunEnv) = mean([length(node.executorids)*1 for node in runenv.nodes])
-
+#-------------------------------------
 # Execution stages based on dependency
+#-------------------------------------
 execution_stages(dag_node) = execution_stages!(deepcopy(dag_node))
 function execution_stages!(dag_node, deps=Dagger.dependents(dag_node), root=dag_node)
     newinps = Set{Thunk}()
@@ -77,6 +22,9 @@ function execution_stages!(dag_node, deps=Dagger.dependents(dag_node), root=dag_
     [dag_node.inputs...]
 end
 
+#----------------------------------------------
+# Execution stages based on costs and affinity
+#----------------------------------------------
 cost_for_nodes(runenv::RunEnv, root_t::Thunk) = [node.brokerid => cost_for_node(node, root_t) for node in runenv.nodes]
 function cost_for_node(node::NodeEnv, root_t::Thunk)
     nc = Dict{TaskIdType,ComputeCost}()
@@ -103,7 +51,7 @@ end
 compute_cost(dag_node, processorids::Vector{UInt64}, costs::Dict{TaskIdType,ComputeCost}) = ComputeCost(0.0, 0.0)
 function compute_cost(dag_node::Thunk, processorids::Vector{UInt64}, costs::Dict{TaskIdType,ComputeCost})
     inps = dag_node.inputs
-    costs[DagScheduler.taskid(dag_node)] = isempty(inps) ? ComputeCost(1.0, 0.0) : cost_function(dag_node)(map((inp)->compute_cost(inp, processorids, costs), inps))
+    costs[taskid(dag_node)] = isempty(inps) ? ComputeCost(1.0, 0.0) : cost_function(dag_node)(map((inp)->compute_cost(inp, processorids, costs), inps))
 end
 function compute_cost(dag_node::Chunk, processorids::Vector{UInt64}, costs::Dict{TaskIdType,ComputeCost})
     # network transfer cost (arbitrarily set as 1 per 1MB - needs to be parameterized)
@@ -198,4 +146,12 @@ function add_stages_by_compute_cost(staged_node::Thunk, full_dag::Thunk, costs::
             staged_node.inputs = tuple(chld...)
         end
     end
+end
+
+end # module DefaultScheduler
+
+function schedule(runenv::RunEnv, root_t::Thunk)
+    execstages = DefaultScheduler.execution_stages(root_t)
+    DefaultScheduler.extend_stages_by_affinity(runenv, execstages, root_t)
+    execstages
 end
