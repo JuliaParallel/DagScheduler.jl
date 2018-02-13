@@ -259,7 +259,10 @@ function master_schedule(env, execstages, scheduled, completed)
         schedulable = Vector{Tuple{Int,TaskIdType}}()
         for task in execstages
             filter!(x->(isa(x, Thunk) && !(taskid(x) in completed)), task)
-            walk_dag(task, (x,d)->(!(taskid(x) in scheduled) && isempty(x.inputs) && push!(schedulable, (d,taskid(x)))), false)
+            walk_dag(task, false) do x,d
+                !(taskid(x) in scheduled) && isempty(x.inputs) && push!(schedulable, (d,taskid(x)))
+                nothing
+            end
         end
         tasklog(env, "found $(length(schedulable)) schedulable tasks")
         for (d,tid) in sort!(schedulable; lt=(x,y)->isless(x[1], y[1]), rev=true)
@@ -272,7 +275,9 @@ function master_schedule(env, execstages, scheduled, completed)
     nothing
 end
 
-function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
+function runmaster(runenv::RunEnv, id::UInt64, brokerid::UInt64, root_t; debug::Bool=false)
+    rootpath = runenv.rootpath
+
     if genv[] === nothing
         env = genv[] = ExecutionCtx(META_IMPL[:cluster], rootpath, id, brokerid, :master, typemax(Int); debug=debug)
     else
@@ -281,7 +286,7 @@ function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t; debug
     env.debug = debug
 
     # determine critical path
-    execstages = execution_stages(root_t)
+    execstages = schedule(runenv, root_t)
     completed = Vector{TaskIdType}()
     scheduled = Vector{TaskIdType}()
 
@@ -430,7 +435,7 @@ function rundag(runenv::RunEnv, dag::Thunk)
     end
 
     #info("spawning master broker")
-    res = runmaster(runenv.rootpath, UInt64(myid()), runenv.masterid, dag; debug=runenv.debug)
+    res = runmaster(runenv, UInt64(myid()), runenv.masterid, dag; debug=runenv.debug)
 
     runenv.reset_task = @schedule wait_for_executors(runenv)
     res
