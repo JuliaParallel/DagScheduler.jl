@@ -171,10 +171,13 @@ function _remove_from_tasklist(tasklist::Vector{Pair{String,TaskIdType}}, tpath:
     nothing
 end
 
-function steal_task(M::EtcdExecutorMeta)
+function steal_task(M::EtcdExecutorMeta, selector=default_task_scheduler)
     tasklist = M.tasklist
+    tasks = [x[2] for x in tasklist]
+    pos = 0
     while !isempty(tasklist)
-        tpath, taskid = tasklist[1]
+        pos = selector(tasks)
+        tpath, taskid = tasklist[pos]
         try
             resp = delete(M.cli, tpath)
             #last_index = resp["node"]["modifiedIndex"]
@@ -184,6 +187,7 @@ function steal_task(M::EtcdExecutorMeta)
         catch ex
             if isa(ex, EtcdError) && (ex.resp["errorCode"] == 100)
                 _remove_from_tasklist(tasklist, tpath)
+                splice!(tasks, pos)
             else
                 rethrow(ex)
             end

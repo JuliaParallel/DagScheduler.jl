@@ -3,7 +3,7 @@ mutable struct ExecutionCtx
     brokerid::UInt64                            # broker id
     rootpath::String                            # root path identifying the run
     role::Symbol                                # :executor, :broker or :master
-    meta::ExecutorMeta                             # shared metadata store
+    meta::ExecutorMeta                          # shared metadata store
     reserved::Vector{TaskIdType}                # tasks reserved for this component
     stolen::Set{TaskIdType}                     # tasks that this component has stolen from others
     expanded::Set{TaskIdType}                   # tasks that have been expanded (not new tasks)
@@ -14,9 +14,10 @@ mutable struct ExecutionCtx
     dependents::Dict{Thunk,Set{Thunk}}          # dependents of each node in the dag being processed
     reset_task::Union{Task,Void}                # async task to reset the scheduler env after a run
     taskidmap::Dict{TaskIdType,Thunk}           # for quick lookup
+    costs::Union{Vector,Void}                   # optional task costs per broker
     debug::Bool                                 # switch on debug logging
 
-    function ExecutionCtx(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; debug::Bool=false)
+    function ExecutionCtx(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; costs=nothing, debug::Bool=false)
         broker_rootpath = joinpath(rootpath, string(brokerid))
         new(id, brokerid, rootpath, role,
             metastore(metastore_impl, broker_rootpath, help_threshold),
@@ -24,7 +25,7 @@ mutable struct ExecutionCtx
             Set{TaskIdType}(),
             Set{TaskIdType}(),
             0, 0, 0, nothing, Dict{Thunk,Set{Thunk}}(),
-            nothing, Dict{TaskIdType,Thunk}(), debug)
+            nothing, Dict{TaskIdType,Thunk}(), costs, debug)
     end
 end
 
@@ -168,8 +169,8 @@ function stolen_task_input_watchlist(env::ExecutionCtx, task::TaskIdType)
     dependents
 end
 =#
-function steal(env::ExecutionCtx)
-    task = steal_task(env.meta)
+function steal(env::ExecutionCtx, selector=default_task_selector)
+    task = steal_task(env.meta, selector)
     if task !== NoTask
         push!(env.stolen, task)
         env.nstolen += 1

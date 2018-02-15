@@ -182,10 +182,13 @@ function share_task(M::ShmemExecutorMeta, id::TaskIdType, allow_dup::Bool)
     nothing
 end
 
-function steal_task(M::ShmemExecutorMeta)
+function steal_task(M::ShmemExecutorMeta, selector=default_task_scheduler)
     task = NoTask
     withlock(M.sharedtasks.lck) do
-        isempty(M.sharedtasks) || (task = shift!(M.sharedtasks))
+        if !isempty(M.sharedtasks)
+            pos = selector(M.sharedtasks[1:end])
+            task = splice!(M.sharedtasks, pos)
+        end
     end
     if task !== NoTask
         change(M.sharedcounter, [SemBuf(1,1)])
