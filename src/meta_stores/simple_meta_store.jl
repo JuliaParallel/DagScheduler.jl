@@ -124,8 +124,8 @@ function share_task(M::SimpleExecutorMeta, id::TaskIdType, allow_dup::Bool)
     nothing
 end
 
-function steal_task(M::SimpleExecutorMeta)
-    taskid = brokercall(broker_steal_task, M)::TaskIdType
+function steal_task(M::SimpleExecutorMeta, selector=default_task_scheduler)
+    taskid = brokercall(broker_steal_task, M, selector)::TaskIdType
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 
@@ -213,14 +213,15 @@ function broker_share_task(id::TaskIdType, annotated::TaskIdType, allow_dup::Boo
     nothing
 end
 
-function broker_steal_task()
+function broker_steal_task(selector)
     genv = DagScheduler.genv[]
     (genv === nothing) && (return NoTask)
     M = (genv.meta)::SimpleExecutorMeta
     taskid = withtaskmutex() do
         taskid = NoTask
         if !isempty(TASKS)
-            taskid = shift!(TASKS)
+            pos = selector(TASKS)
+            taskid = splice!(TASKS, pos)
             M.sharemode.nshared -= 1
             M.sharemode.ndeleted += 1
         end

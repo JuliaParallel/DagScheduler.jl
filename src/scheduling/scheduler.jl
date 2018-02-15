@@ -1,7 +1,7 @@
 module DefaultScheduler
 
 import ..DagScheduler: Dagger, RunEnv, NodeEnv, Thunk, Chunk, DRef, ComputeCost, TaskIdType, istask,
-        cost_function, taskid, mean_node_capacity, walk_dag, fval, SPLIT_CAPACITY_RATIO, SPLIT_COST_RATIO,
+        cost_function, taskid, walk_dag, fval, SPLIT_CAPACITY_RATIO, SPLIT_COST_RATIO,
         find_node
 
 #-------------------------------------
@@ -32,17 +32,12 @@ function cost_for_node(node::NodeEnv, root_t::Thunk)
     nc
 end
 
-function extend_stages_by_affinity(runenv::RunEnv, stages::Vector{Thunk}, root_t::Thunk)
-    if length(runenv.nodes) > 1
-        costs = cost_for_nodes(runenv, root_t)
-        nodecap = mean_node_capacity(runenv)
+function extend_stages_by_affinity(runenv::RunEnv, stages::Vector{Thunk}, root_t::Thunk, costs::Vector{Pair{UInt64,Dict{TaskIdType,ComputeCost}}}, nodecap::Float64)
+    for stage in stages
+        #add_stages_by_compute_cost(stage, root_t, costs, nodecap)
 
-        for stage in stages
-            #add_stages_by_compute_cost(stage, root_t, costs, nodecap)
-
-            walk_dag(stage, false) do n,d
-                add_stages_by_compute_cost(n, root_t, costs, nodecap)
-            end
+        walk_dag(stage, false) do n,d
+            add_stages_by_compute_cost(n, root_t, costs, nodecap)
         end
     end
     nothing
@@ -152,6 +147,26 @@ end # module DefaultScheduler
 
 function schedule(runenv::RunEnv, root_t::Thunk)
     execstages = DefaultScheduler.execution_stages(root_t)
-    DefaultScheduler.extend_stages_by_affinity(runenv, execstages, root_t)
-    execstages
+
+    if length(runenv.nodes) > 1
+        costs = DefaultScheduler.cost_for_nodes(runenv, root_t)
+        nodecap = mean_node_capacity(runenv)
+        DefaultScheduler.extend_stages_by_affinity(runenv, execstages, root_t, costs, nodecap)
+    else
+        costs = []
+    end
+
+    execstages, costs
+end
+
+function affinity(tid::TaskIdType, brokerid::UInt64, costs::Vector{Pair{UInt64,Dict{TaskIdType,ComputeCost}}})
+    tc, cc = DefaultScheduler.schedule_target(tid, costs)
+
+    if !isempty(cc)
+        for (b,c) in cc
+            (b === brokerid) && (return c)
+        end
+    end
+
+    1.0
 end

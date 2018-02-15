@@ -80,6 +80,8 @@ function brokercall(fn, M, args...)
     result
 end
 
+default_task_selector(x) = 1
+
 resultroot{T<:ExecutorMeta}(M::T) = joinpath(M.path, "result")
 resultpath{T<:ExecutorMeta}(M::T, id::TaskIdType) = joinpath(resultroot(M), string(id))
 sharepath{T<:ExecutorMeta}(M::T, id::TaskIdType) = joinpath(M.path, "shared", string(id))
@@ -94,7 +96,7 @@ delete!{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
 reset{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
 cleanup{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
 share_task{T<:ExecutorMeta}(M::T, id::TaskIdType, allow_dup::Bool) = error("method not implemented for $T")
-steal_task{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
+steal_task{T<:ExecutorMeta}(M::T, selector=default_task_selector) = error("method not implemented for $T")
 set_result{T<:ExecutorMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
 get_result{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
 has_result{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
@@ -125,7 +127,7 @@ import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
-        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector
 
 export ShmemExecutorMeta
 
@@ -144,7 +146,7 @@ import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
-        export_local_result, repurpose_result_to_export
+        export_local_result, repurpose_result_to_export, default_task_selector
 
 export EtcdExecutorMeta
 
@@ -161,7 +163,7 @@ import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
-        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector
 
 export SimpleExecutorMeta
 
