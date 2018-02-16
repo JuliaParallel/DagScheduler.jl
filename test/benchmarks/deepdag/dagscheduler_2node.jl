@@ -10,8 +10,8 @@ isdir(".mempool") && rm(".mempool"; recursive=true)
     DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
 end
 
-node1 = NodeEnv(2, [3,4,5])
-node2 = NodeEnv(6, [7,8,9])
+node1 = NodeEnv(2, getipaddr(), [3,4,5])
+node2 = NodeEnv(6, getipaddr(), [7,8,9])
 runenv = RunEnv(; nodes=[node1,node2])
 
 const L = 6^4

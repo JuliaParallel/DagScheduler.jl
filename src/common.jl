@@ -11,13 +11,14 @@ taskid(th::Thunk) = TaskIdType(th.id)
 
 mutable struct NodeEnv
     brokerid::UInt64
+    host::IPAddr
     broker_task::Union{Future,Void}
     executorids::Vector{UInt64}
     executor_tasks::Vector{Future}
     last_task_stat::Vector{Tuple{UInt64,Future}}
 
-    function NodeEnv(brokerid::Integer, executorids::Vector{Int})
-        new(brokerid, nothing, executorids, Vector{Future}(), Vector{Tuple{UInt64,Future}}())
+    function NodeEnv(brokerid::Integer, host::IPAddr, executorids::Vector{Int})
+        new(brokerid, host, nothing, executorids, Vector{Future}(), Vector{Tuple{UInt64,Future}}())
     end
 end
 
@@ -28,7 +29,7 @@ mutable struct RunEnv
     reset_task::Union{Task,Void}
     debug::Bool
 
-    function RunEnv(; rootpath::String="/dagscheduler", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,workers())], debug::Bool=false)
+    function RunEnv(; rootpath::String="/dagscheduler", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false)
         nexecutors = 0
         for node in nodes
             nw = length(node.executorids)

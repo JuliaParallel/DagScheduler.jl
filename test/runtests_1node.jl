@@ -10,7 +10,7 @@ isdir(".mempool") && rm(".mempool"; recursive=true)
     DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
 end
 
-node1 = NodeEnv(2, [3,4,5,6])
+node1 = NodeEnv(2, getipaddr(), [3,4,5,6])
 runenv = RunEnv(; nodes=[node1])
 
 @testset "deep dag" begin
