@@ -10,7 +10,7 @@ isdir(".mempool") && rm(".mempool"; recursive=true)
     DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
 end
 
-node1 = NodeEnv(1, [2,3,4,5,6])
+node1 = NodeEnv(1, getipaddr(), [2,3,4,5,6])
 runenv = RunEnv(; nodes=[node1])
 
 const L = 6^4

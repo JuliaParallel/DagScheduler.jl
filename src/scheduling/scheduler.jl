@@ -1,6 +1,6 @@
 module DefaultScheduler
 
-import ..DagScheduler: Dagger, RunEnv, NodeEnv, Thunk, Chunk, DRef, ComputeCost, TaskIdType, istask,
+import ..DagScheduler: Dagger, RunEnv, NodeEnv, Thunk, Chunk, DRef, FileRef, ComputeCost, TaskIdType, istask,
         cost_function, taskid, walk_dag, fval, SPLIT_CAPACITY_RATIO, SPLIT_COST_RATIO,
         find_node
 
@@ -28,7 +28,7 @@ end
 cost_for_nodes(runenv::RunEnv, root_t::Thunk) = [node.brokerid => cost_for_node(node, root_t) for node in runenv.nodes]
 function cost_for_node(node::NodeEnv, root_t::Thunk)
     nc = Dict{TaskIdType,ComputeCost}()
-    compute_cost(root_t, [node.brokerid, node.executorids...], nc)
+    compute_cost(root_t, [node.brokerid, node.executorids...], node.host, nc)
     nc
 end
 
@@ -43,18 +43,17 @@ function extend_stages_by_affinity(runenv::RunEnv, stages::Vector{Thunk}, root_t
     nothing
 end
 
-compute_cost(dag_node, processorids::Vector{UInt64}, costs::Dict{TaskIdType,ComputeCost}) = ComputeCost(0.0, 0.0)
-function compute_cost(dag_node::Thunk, processorids::Vector{UInt64}, costs::Dict{TaskIdType,ComputeCost})
+compute_cost(dag_node, processorids::Vector{UInt64}, host::IPAddr, costs::Dict{TaskIdType,ComputeCost}) = ComputeCost(0.0, 0.0)
+function compute_cost(dag_node::Thunk, processorids::Vector{UInt64}, host::IPAddr, costs::Dict{TaskIdType,ComputeCost})
     inps = dag_node.inputs
-    costs[taskid(dag_node)] = isempty(inps) ? ComputeCost(1.0, 0.0) : cost_function(dag_node)(map((inp)->compute_cost(inp, processorids, costs), inps))
+    costs[taskid(dag_node)] = isempty(inps) ? ComputeCost(1.0, 0.0) : cost_function(dag_node)(map((inp)->compute_cost(inp, processorids, host, costs), inps))
 end
-function compute_cost(dag_node::Chunk, processorids::Vector{UInt64}, costs::Dict{TaskIdType,ComputeCost})
+function compute_cost(dag_node::Chunk, processorids::Vector{UInt64}, host::IPAddr, costs::Dict{TaskIdType,ComputeCost})
     # network transfer cost (arbitrarily set as 1 per 1MB - needs to be parameterized)
     netcost = 0.0
 
-    if isa(dag_node.handle, DRef) && !(dag_node.handle.owner in processorids)
+    if (isa(dag_node.handle, DRef) && !(dag_node.handle.owner in processorids)) || (isa(dag_node.handle, FileRef) && !(dag_node.handle.host == host))
         netcost = ceil(Int, dag_node.handle.size/10^6)
-    # elseif isa(dag_node.handle, FRef) # TODO: once FRef encodes location
     end
 
     # cpu cost arbitrarily set to 1 for all functions - needs to be provided in configuration/function annotation
