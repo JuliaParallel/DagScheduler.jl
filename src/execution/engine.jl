@@ -200,6 +200,7 @@ function broker_tasks(upenv::ExecutionCtx, env::ExecutionCtx, unified_trigger::C
             end
         end
     catch ex
+        close(unified_trigger)
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
     end
@@ -265,18 +266,22 @@ end
 #--------------------------------------------------------------------
 function master_schedule(env, execstages, scheduled, completed)
     tasklog(env, "scheduling $(length(execstages)) entries")
+    # filter out fully scheduled stages
     isempty(execstages) || filter!((task)->!(taskid(task) in scheduled), execstages)
 
     if !isempty(execstages)
         schedulable = Vector{Tuple{Int,TaskIdType}}()
         for task in execstages
+            # filter out child stages that are completed
             filter!(x->(isa(x, Thunk) && !(taskid(x) in completed)), task)
+            # pick child stages that have no inputs or all inputs ready (indicated by the same condition)
             walk_dag(task, false) do x,d
                 !(taskid(x) in scheduled) && isempty(x.inputs) && push!(schedulable, (d,taskid(x)))
                 nothing
             end
         end
         tasklog(env, "found $(length(schedulable)) schedulable tasks")
+        # schedule for execution, in decreasing order of node depth
         for (d,tid) in sort!(schedulable; lt=(x,y)->isless(x[1], y[1]), rev=true)
             if !(tid in scheduled)
                 keep(env, tid, 0, false)
@@ -406,9 +411,11 @@ function cleanup(runenv::RunEnv)
 end
 
 function rundag(runenv::RunEnv, dag::Thunk)
+    #=
     dag, _elapsedtime, _bytes, _gctime, _memallocs = @timed begin
         dref_to_fref(dag)
     end
+    =#
     #info("dag preparation time: $_elapsedtime")
 
     # determine critical path
