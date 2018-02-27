@@ -4,7 +4,7 @@ module DagScheduler
 using Dagger
 using MemPool
 
-import Dagger: istask, inputs, Chunk
+import Dagger: istask, inputs, Chunk, cleanup
 import Base: delete!, filter!, +, /, isless
 
 

@@ -7,19 +7,16 @@ import ..DagScheduler: Dagger, RunEnv, NodeEnv, Thunk, Chunk, DRef, FileRef, Com
 #-------------------------------------
 # Execution stages based on dependency
 #-------------------------------------
-execution_stages(dag_node) = execution_stages!(deepcopy(dag_node))
-function execution_stages!(dag_node, deps=Dagger.dependents(dag_node), root=dag_node)
+function execution_stages(dag_node, deps=Dagger.dependents(dag_node), root=dag_node)
     newinps = Set{Thunk}()
     for inp in dag_node.inputs
         if istask(inp)
-            for cinp in execution_stages!(inp, deps, root)
+            for cinp in execution_stages(inp, deps, root)
                 push!(newinps, cinp)
             end
         end
     end
-    dag_node.inputs = tuple(newinps...)
-    ((dag_node == root) || (length(deps[dag_node]) > 1)) && (return [dag_node])
-    [dag_node.inputs...]
+    ((dag_node == root) || (length(deps[dag_node]) > 1)) ? [copy_thunk(dag_node, newinps)] : [newinps...]
 end
 
 #----------------------------------------------
@@ -126,8 +123,7 @@ function add_stages_by_compute_cost(staged_node::Thunk, full_dag::Thunk, costs::
             end
 
             # create a new staged node (with its children) and insert
-            staged_n = deepcopy(n)
-            staged_n.inputs = tuple(nchld...)
+            staged_n = copy_thunk(n, nchld)
             push!(chld, staged_n)
         end
 
@@ -141,6 +137,15 @@ function add_stages_by_compute_cost(staged_node::Thunk, full_dag::Thunk, costs::
         end
     end
 end
+
+copy_thunk(dag_node, newinps) = Dagger.Thunk(dag_node.f, newinps...;
+            id = dag_node.id,
+            get_result = dag_node.get_result,
+            meta = dag_node.meta,
+            persist = dag_node.persist,
+            cache = dag_node.cache,
+            cache_ref = dag_node.cache_ref,
+            affinity = dag_node.affinity)
 
 end # module DefaultScheduler
 
