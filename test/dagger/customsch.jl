@@ -18,6 +18,7 @@ function compute_dag(ctx, d::Dagger.Thunk)
 end
 
 function cleanup(ctx)
+    global _drunenv
     (_drunenv === nothing) || DagScheduler.cleanup(_drunenv)
     _drunenv = nothing
 end

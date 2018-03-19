@@ -2,6 +2,7 @@ addprocs(2)
 
 using Base.Test
 using Dagger
+using DagScheduler
 
 @everywhere include("customsch.jl")
 
