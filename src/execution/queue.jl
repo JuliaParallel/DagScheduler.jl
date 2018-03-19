@@ -299,7 +299,11 @@ function exec(env::ExecutionCtx, task::TaskIdType)
     end
 
     # export (if other processes need it) or keep in memory (for use in-process) the result
+    # TODO: handle vector of chunks specially?
     if was_stolen(env, task)
+        if !isa(res, Chunk)
+            res = Dagger.tochunk(res)
+        end
         if isa(res, Chunk) && isa(res.handle, DRef)
             res = chunktodisk(res)
         end
