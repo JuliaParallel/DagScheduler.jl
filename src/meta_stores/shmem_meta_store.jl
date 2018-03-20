@@ -1,13 +1,14 @@
 # scheduler metadata store
 
-const MAP_SZ = 1000^3              # size of shared dict for results and ref counts
+const MAP_NUM_ENTRIES = 1024*5     # max number of results to store in shared dict
+const MAP_ENTRY_SZ = 256           # max size of each result stored in shared dict
 const DONE_TASKS_SZ = 1024*100     # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))
 const SHARED_TASKS_SZ = 1024*100   # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))
 
 mutable struct ShmemExecutorMeta <: ExecutorMeta
     path::String
     brokerid::Int
-    env::Environment
+    shmdict::ShmDict
     proclocal::Dict{String,Any}
     allsharedtasks::SharedCircularDeque{TaskIdType}
     sharedtasks::SharedCircularDeque{TaskIdType}
@@ -23,29 +24,19 @@ mutable struct ShmemExecutorMeta <: ExecutorMeta
     function ShmemExecutorMeta(path::String, sharethreshold::Int)
         path = joinpath("/dev/shm", startswith(path, '/') ? path[2:end] : path)
         isdir(path) || mkpath(path)
-        env = LMDB.create()
 
-        # we want it to be sync, since we are using across processes
-        isflagset(env[:Flags], Cuint(LMDB.NOSYNC)) && unset!(env, LMDB.NOSYNC)
-
-        env[:Readers] = 1
-        env[:MapSize] = MAP_SZ
-        env[:DBs] = 1
-
-        dbpath = lmdbpath(path)
-        isdir(dbpath) || mkpath(dbpath)
-        open(env, dbpath)
-
+        mkpath(shmdictpath(path))
         mkpath(donetaskspath(path))
         mkpath(sharedtaskspath(path))
         mkpath(allsharedtaskspath(path))
         mkpath(sharedcounterpath(path))
+        shmdict = ShmDict(shmdictpath(path), MAP_NUM_ENTRIES, MAP_ENTRY_SZ; create=true)
         sharedtasks = SharedCircularDeque{TaskIdType}(sharedtaskspath(path), SHARED_TASKS_SZ; create=false)
         allsharedtasks = SharedCircularDeque{TaskIdType}(allsharedtaskspath(path), SHARED_TASKS_SZ; create=false)
         donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(path), DONE_TASKS_SZ; create=false)
         sharedcounter = ResourceCounter(sharedcounterpath(path), 2; create=true)
         trigger = nothing
-        new(path, 0, env, Dict{String,Any}(),
+        new(path, 0, shmdict, Dict{String,Any}(),
             allsharedtasks, sharedtasks, donetasks,
             ShareMode(sharethreshold), sharedcounter, trigger,
             identity, identity, 0, nothing)
@@ -60,7 +51,8 @@ allsharedtaskspath(M::ShmemExecutorMeta) = allsharedtaskspath(M.path)
 allsharedtaskspath(path::String) = joinpath(path, "tasks.allshared")
 sharedcounterpath(M::ShmemExecutorMeta) = sharedcounterpath(M.path)
 sharedcounterpath(path::String) = joinpath(path, "counter")
-lmdbpath(path::String) = joinpath(path, "lmdb")
+shmdictpath(M::ShmemExecutorMeta) = shmdictpath(M.path)
+shmdictpath(path::String) = joinpath(path, "shmdict")
 
 function init(M::ShmemExecutorMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.brokerid = brokerid
@@ -129,13 +121,10 @@ function delete!(M::ShmemExecutorMeta)
     M.donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(M), DONE_TASKS_SZ; create=true)
     if myid() === M.brokerid
         deregister(pinger)
+        withlock(M.shmdict.lck) do
+            empty!(M.shmdict)
+        end
     end
-    txn = start(M.env)
-    dbi = open(txn)
-    drop(txn, dbi; delete=true)
-    commit(txn)
-    close(M.env, dbi)
-    close(M.env)
 
     nothing
 end
@@ -155,6 +144,7 @@ function cleanup(M::ShmemExecutorMeta)
     delete!(M.sharedtasks)
     delete!(M.donetasks)
     delete!(M.sharedcounter)
+    delete!(M.shmdict)
     rm(M.path; force=true, recursive=true)
     nothing
 end
@@ -204,15 +194,8 @@ function set_result(M::ShmemExecutorMeta, id::TaskIdType, val; refcount::UInt64=
     M.proclocal[k] = val
 
     if !processlocal
-        txn = start(M.env)
-        dbi = open(txn)
-        try
-            put!(txn, dbi, k, meta_ser((val,refcount)))
-        catch ex
-            rethrow(ex)
-        finally
-            commit(txn)
-            close(M.env, dbi)
+        withlock(M.shmdict.lck) do
+            M.shmdict[k] = (val,refcount)
         end
 
         withlock(M.donetasks.lck) do
@@ -232,17 +215,14 @@ function get_result(M::ShmemExecutorMeta, id::TaskIdType)
     if k in keys(M.proclocal)
         M.proclocal[k]
     else
-        txn = start(M.env)
-        dbi = open(txn)
+        sval = withlock(M.shmdict.lck) do
+            M.shmdict[k]
+        end
         try
-            val, refcount = meta_deser(get(txn, dbi, k, String))
-            M.proclocal[k] = val
-            val
+        val, refcount = deserialize(IOBuffer(sval))
+        val
         catch ex
-            rethrow(ex)
-        finally
-            commit(txn)
-            close(M.env, dbi)
+            println("exception deserializing val of size $(length(sval))")
         end
     end
 end
@@ -259,23 +239,16 @@ end
 function decr_result_ref(M::ShmemExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
 
-    txn = start(M.env)
-    dbi = open(txn)
-    try
-        val, refcount = meta_deser(get(txn, dbi, k, String))
+    withlock(M.shmdict.lck) do
+        val, refcount = deserialize(IOBuffer(M.shmdict[k]))
         refcount -= 1
         if refcount > 0
-            put!(txn, dbi, k, meta_ser((val,refcount)))
+            M.shmdict[k] = (val,refcount)
         else
-            delete!(txn, dbi, k, C_NULL)
+            delete!(M.shmdict, k)
             (k in keys(M.proclocal)) && delete!(M.proclocal, k)
         end
-        return refcount
-    catch ex
-        rethrow(ex)
-    finally
-        commit(txn)
-        close(M.env, dbi)
+        refcount
     end
 end
 
@@ -285,15 +258,8 @@ function export_local_result(M::ShmemExecutorMeta, id::TaskIdType, executable, r
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
 
-    txn = start(M.env)
-    dbi = open(txn)
-    try
-        put!(txn, dbi, k, meta_ser((val,refcount)))
-    catch ex
-        rethrow(ex)
-    finally
-        commit(txn)
-        close(M.env, dbi)
+    withlock(M.shmdict.lck) do
+        M.shmdict[k] = (val,refcount)
     end
 
     withlock(M.donetasks.lck) do

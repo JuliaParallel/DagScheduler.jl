@@ -115,13 +115,11 @@ metastore(name::String, args...) = (get_type(name))(args...)
 
 # include the meta implementations
 
-# ShmemMeta - uses shared memory and LMDB as metadata store
+# ShmemMeta - uses shared memory as metadata store
 module ShmemMeta
 
 using Semaphores
 using SharedDataStructures
-using LMDB
-import LMDB: MDBValue, close
 
 import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,

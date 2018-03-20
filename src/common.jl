@@ -29,7 +29,7 @@ mutable struct RunEnv
     reset_task::Union{Task,Void}
     debug::Bool
 
-    function RunEnv(; rootpath::String="/dagscheduler", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false)
+    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false)
         nexecutors = 0
         for node in nodes
             nw = length(node.executorids)
