@@ -212,7 +212,8 @@ end
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
 function runbroker(rootpath::String, id::UInt64, upstream_brokerid::UInt64, root_t::Thunk, costs::Vector;
-        debug::Bool=false, upstream_help_threshold::Int=typemax(Int), downstream_help_threshold::Int=typemax(Int))
+        debug::Bool=false, profile::Bool=false, upstream_help_threshold::Int=typemax(Int), downstream_help_threshold::Int=typemax(Int))
+    profile_init(profile, "broker_$(id)")
     if genv[] === nothing
         env = genv[] = ExecutionCtx(META_IMPL[:node], rootpath, id, id, :broker, downstream_help_threshold; debug=debug)
     else
@@ -257,6 +258,7 @@ function runbroker(rootpath::String, id::UInt64, upstream_brokerid::UInt64, root
     finally
         async_reset(env)
         async_reset(upenv)
+        profile_end(profile, "broker_$(id)")
     end
 end
 
@@ -332,7 +334,8 @@ function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t::Thunk
 end
 
 function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, masterid::UInt64, root_t::Thunk;
-        debug::Bool=false, help_threshold::Int=typemax(Int))
+        debug::Bool=false, profile::Bool=false, help_threshold::Int=typemax(Int))
+    profile_init(profile, "executor_$(brokerid)_$(id)")
     if genv[] === nothing
         env = genv[] = ExecutionCtx(META_IMPL[:node], rootpath, id, brokerid, :executor, help_threshold; debug=debug)
     else
@@ -390,6 +393,7 @@ function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, masterid::U
         rethrow(ex)
     finally
         async_reset(env)
+        profile_end(profile, "executor_$(brokerid)_$(id)")
     end
     #tasklog(env, "done")
     (env.nstolen, env.nshared, env.nexecuted)
@@ -411,6 +415,7 @@ function cleanup(runenv::RunEnv)
 end
 
 function rundag(runenv::RunEnv, dag::Thunk)
+    profile_init(runenv.profile, "master_$(runenv.masterid)")
     #=
     dag, _elapsedtime, _bytes, _gctime, _memallocs = @timed begin
         dref_to_fref(dag)
@@ -439,7 +444,7 @@ function rundag(runenv::RunEnv, dag::Thunk)
             executorid = node.executorids[idx]
             #info("spawning executor $executorid")
             join_count[] += 1
-            executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, node.brokerid, runenv.masterid, dag; debug=runenv.debug, help_threshold=help_threshold)
+            executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, node.brokerid, runenv.masterid, dag; debug=runenv.debug, profile=runenv.profile, help_threshold=help_threshold)
             push!(node.executor_tasks, executor_task)
         end
 
@@ -447,7 +452,7 @@ function rundag(runenv::RunEnv, dag::Thunk)
             #info("spawning broker $(node.brokerid)")
             join_count[] += 1
             node.broker_task = @spawnat node.brokerid runbroker(runenv.rootpath, node.brokerid, runenv.masterid, dag, costs;
-                debug=runenv.debug,
+                debug=runenv.debug, profile=runenv.profile,
                 upstream_help_threshold=upstream_help_threshold,
                 downstream_help_threshold=help_threshold)
         end
@@ -457,5 +462,6 @@ function rundag(runenv::RunEnv, dag::Thunk)
     res = runmaster(runenv.rootpath, UInt64(myid()), runenv.masterid, dag, execstages; debug=runenv.debug)
 
     runenv.reset_task = @schedule wait_for_executors(runenv)
+    profile_end(runenv.profile, "master_$(runenv.masterid)")
     res
 end

@@ -28,8 +28,9 @@ mutable struct RunEnv
     nodes::Vector{NodeEnv}
     reset_task::Union{Task,Void}
     debug::Bool
+    profile::Bool
 
-    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false)
+    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false, profile::Bool=false)
         nexecutors = 0
         for node in nodes
             nw = length(node.executorids)
@@ -44,7 +45,7 @@ mutable struct RunEnv
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
 
-        new(rootpath, masterid, nodes, nothing, debug)
+        new(rootpath, masterid, nodes, nothing, debug, profile)
     end
 end
 
@@ -85,6 +86,19 @@ function taskexception(env, ex, bt)
     tasklog(env, "exception ", xret)
     @show xret
     xret
+end
+
+function profile_init(prof::Bool, myid::String)
+    prof && Profile.start_timer()
+end
+
+function profile_end(prof::Bool, myid::String)
+    if prof
+        Profile.stop_timer()
+        open("/tmp/$(myid).profile", "w") do f
+            Profile.print(IOContext(f, :displaysize => (256, 1024)))
+        end
+    end
 end
 
 #------------------------------------
