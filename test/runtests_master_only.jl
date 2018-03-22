@@ -44,6 +44,7 @@ end
 
         # for cross dag
         dag4 = gen_sort_dag(L, 40, 4, 40)
+        DagScheduler.dref_to_fref!(dag4)
         result = collect(rundag(runenv, dag4))
         info("result = ", typeof(result), ", length: ", length(result))
         fullresult = collect(Dagger.treereduce(delayed(vcat), result))

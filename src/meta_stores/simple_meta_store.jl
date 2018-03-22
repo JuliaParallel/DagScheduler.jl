@@ -172,7 +172,7 @@ function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, 
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
     serval = meta_ser((val,refcount))
-    brokercall(broker_set_result, M, k, ser_val)
+    brokercall(broker_set_result, M, k, serval)
     nothing
 end
 

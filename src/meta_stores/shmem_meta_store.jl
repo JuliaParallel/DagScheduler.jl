@@ -218,12 +218,8 @@ function get_result(M::ShmemExecutorMeta, id::TaskIdType)
         sval = withlock(M.shmdict.lck) do
             M.shmdict[k]
         end
-        try
         val, refcount = deserialize(IOBuffer(sval))
         val
-        catch ex
-            println("exception deserializing val of size $(length(sval))")
-        end
     end
 end
 

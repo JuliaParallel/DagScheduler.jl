@@ -28,8 +28,9 @@ mutable struct RunEnv
     nodes::Vector{NodeEnv}
     reset_task::Union{Task,Void}
     debug::Bool
+    profile::Bool
 
-    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false)
+    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false, profile::Bool=false)
         nexecutors = 0
         for node in nodes
             nw = length(node.executorids)
@@ -44,7 +45,7 @@ mutable struct RunEnv
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
 
-        new(rootpath, masterid, nodes, nothing, debug)
+        new(rootpath, masterid, nodes, nothing, debug, profile)
     end
 end
 
@@ -77,7 +78,7 @@ mean_node_capacity(runenv::RunEnv) = mean([length(node.executorids)*1 for node i
 # Logging utilities
 #------------------------------------
 function tasklog(env, msg...)
-    env.debug && info(env.role, " : ", env.id, " : ", env.brokerid, " : ", msg...)
+    env.debug && info(now(), " ", env.role, " : ", env.id, " : ", env.brokerid, " : ", msg...)
 end
 
 function taskexception(env, ex, bt)
@@ -85,6 +86,19 @@ function taskexception(env, ex, bt)
     tasklog(env, "exception ", xret)
     @show xret
     xret
+end
+
+function profile_init(prof::Bool, myid::String)
+    prof && Profile.start_timer()
+end
+
+function profile_end(prof::Bool, myid::String)
+    if prof
+        Profile.stop_timer()
+        open("/tmp/$(myid).profile", "w") do f
+            Profile.print(IOContext(f, :displaysize => (256, 1024)))
+        end
+    end
 end
 
 #------------------------------------
@@ -116,7 +130,8 @@ end
 get_frefs(dag) = map(chunktodisk, get_drefs(dag))
 =#
 
-chunktodisk(chunk) = Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), chunk.persist)
+chunktodisk(chunks::Vector{Chunk}) = map(chunktodisk, chunks)
+chunktodisk(chunk::Chunk) = isa(chunk.handle, DRef) ? Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), chunk.persist) : chunk
 
 function walk_dag(fn, dag_node, update::Bool, stop_nodes=TaskIdType[], depth::Int=1)
     if isa(dag_node, Thunk) && !(taskid(dag_node) in stop_nodes)
