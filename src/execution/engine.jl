@@ -154,7 +154,7 @@ function broker_tasks(upenv::ExecutionCtx, env::ExecutionCtx, unified_trigger::C
         end
         last_upstream = last_downstream = 0.0
         while do_trigger[]
-            tasklog(env, "doing broker tasks")
+            #tasklog(env, "doing broker tasks")
             tnow = time()
 
             upstat, downstat = upenv.meta.sharemode, env.meta.sharemode
@@ -164,10 +164,7 @@ function broker_tasks(upenv::ExecutionCtx, env::ExecutionCtx, unified_trigger::C
             from_upstream = needed_downstream && have_upstream && ((tnow - last_downstream) > 0.5)
             from_downstream = needed_upstream && !needed_downstream && have_downstream && ((tnow - last_upstream) > 0.5)
 
-            tasklog(env, "nshared up,down = $(upstat.nshared),$(downstat.nshared)")
-            tasklog(env, "ncreated up,down = $(upstat.ncreated),$(downstat.ncreated)")
-            tasklog(env, "ndeleted up,down = $(upstat.ndeleted),$(downstat.ndeleted)")
-            tasklog(env, "should_share up,down = $(needed_upstream),$(needed_downstream)")
+            tasklog(env, "up,down | shared($(upstat.nshared),$(downstat.nshared)) created($(upstat.ncreated),$(downstat.ncreated)) del($(upstat.ndeleted),$(downstat.ndeleted)) share($(needed_upstream),$(needed_downstream))")
 
             if from_upstream
                 tasklog(env, "bring new upstream tasks into local node")
