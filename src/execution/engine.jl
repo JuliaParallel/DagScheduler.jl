@@ -44,6 +44,29 @@ function print_stats(runenv::RunEnv)
     nothing
 end
 
+function check_failures(runenv::RunEnv, onfailure=(pid,res)->info("PID $pid failed with $res"))
+    nfailures = 0
+    @sync for node in runenv.nodes
+        @async begin
+            tasklist = []
+            if node.broker_task !== nothing
+                push!(tasklist, (node.brokerid, node.broker_task))
+            end
+            append!(tasklist, zip(node.executorids, node.executor_tasks))
+            for (pid,task) in tasklist
+                if isready(task)
+                    result = fetch(task)
+                    if !isa(result, Tuple)
+                        onfailure(pid, result)
+                        nfailures += 1
+                    end
+                end
+            end
+        end
+    end
+    nfailures
+end
+
 function delete_meta(masterid::UInt64, nodes::Vector{NodeEnv}, rootpath::String)
     @sync begin
         @async delete_meta(META_IMPL[:cluster], rootpath, masterid)
@@ -291,7 +314,10 @@ function master_schedule(env, execstages, scheduled, completed)
     nothing
 end
 
-function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t::Thunk, execstages; debug::Bool=false)
+function runmaster(runenv::RunEnv, root_t::Thunk, execstages; debug::Bool=false)
+    rootpath = runenv.rootpath
+    id = UInt64(myid())
+    brokerid = runenv.masterid
     if genv[] === nothing
         env = genv[] = ExecutionCtx(META_IMPL[:cluster], rootpath, id, brokerid, :master, typemax(Int); debug=debug)
     else
@@ -306,7 +332,13 @@ function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t::Thunk
     tasklog(env, "invoked")
 
     remotecall_wait(join_cluster, Int(id))
+    started = false
+    @async while !started && !isready(start_cond)
+        check_failures(runenv)
+        sleep(0.01)
+    end
     take!(start_cond)
+    started = true
     tasklog(env, "all brokers and executors joined cluster")
 
     try
@@ -317,6 +349,7 @@ function runmaster(rootpath::String, id::UInt64, brokerid::UInt64, root_t::Thunk
             # while critical path items exist, process them first
             master_schedule(env, execstages, scheduled, completed)
             wait_trigger(env.meta)
+            check_failures(runenv)
         end
 
         tasklog(env, "stole ", env.nstolen, " shared ", env.nshared, " tasks")
@@ -456,7 +489,7 @@ function rundag(runenv::RunEnv, dag::Thunk)
     end
 
     #info("spawning master broker")
-    res = runmaster(runenv.rootpath, UInt64(myid()), runenv.masterid, dag, execstages; debug=runenv.debug)
+    res = runmaster(runenv, dag, execstages; debug=runenv.debug)
 
     runenv.reset_task = @schedule wait_for_executors(runenv)
     profile_end(runenv.profile, "master_$(runenv.masterid)")
