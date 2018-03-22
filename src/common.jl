@@ -78,7 +78,7 @@ mean_node_capacity(runenv::RunEnv) = mean([length(node.executorids)*1 for node i
 # Logging utilities
 #------------------------------------
 function tasklog(env, msg...)
-    env.debug && info(env.role, " : ", env.id, " : ", env.brokerid, " : ", msg...)
+    env.debug && info(now(), " ", env.role, " : ", env.id, " : ", env.brokerid, " : ", msg...)
 end
 
 function taskexception(env, ex, bt)
