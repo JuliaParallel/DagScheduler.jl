@@ -130,7 +130,7 @@ function upstream_result_to_local(env, task, res)
         if !has_result(env.meta, task)
             t = get_executable(env, task)
             refcount = UInt64(length(env.dependents[t]))
-            set_result(env.meta, task, res; refcount=refcount, processlocal=false)
+            @schedule set_result(env.meta, task, res; refcount=refcount, processlocal=false)
         end
     catch ex
         taskexception(env, ex, catch_backtrace())
@@ -144,7 +144,7 @@ function local_result_to_upstream(upenv, task, res)
         if ((task === taskid(upenv.dag_root)) || was_stolen(upenv, task)) && !has_result(upenv.meta, task)
             t = get_executable(upenv, task)
             refcount = UInt64(length(upenv.dependents[t]))
-            set_result(upenv.meta, task, res; refcount=refcount, processlocal=false)
+            @schedule set_result(upenv.meta, task, res; refcount=refcount, processlocal=false)
         end
     catch ex
         taskexception(env, ex, catch_backtrace())
@@ -163,19 +163,24 @@ function unify_trigger(env::ExecutionCtx, root::TaskIdType, unified_trigger::Cha
     nothing
 end
 
-function broker_task_selector(tasks, brokerid, costs, del_annotation, rev::Bool)
-    sortperm(tasks, by=(tid)->affinity(del_annotation(tid), brokerid, costs), rev=true)[1]
+function broker_task_selector(tasks::Vector{UInt64}, brokerid::UInt64, rev::Bool)
+    env = (genv[])::ExecutionCtx
+    costs = env.costs
+    del_annotation = env.meta.del_annotation
+    affs = map((tid)->affinity(del_annotation(tid), brokerid, costs), tasks)
+    _val, idx = rev ? findmin(affs) : findmax(affs)
+    idx
 end
 
 function broker_tasks(upenv::ExecutionCtx, env::ExecutionCtx, unified_trigger::Channel{Void}, do_trigger::Ref{Bool})
     try
         costs = env.costs
         hascosts = (costs !== nothing) && !isempty(costs)
-        if hascosts
-            broker_from_upstream_task_selector = (tasks) -> broker_task_selector(tasks, env.brokerid, costs, env.meta.del_annotation, false)  # get task with highest affinity for the broker
-            broker_from_downstream_task_selector = (tasks) -> broker_task_selector(tasks, env.brokerid, costs, env.meta.del_annotation, true) # get task with least affinity for the broker
-        end
+        brokerid = env.brokerid
+        broker_from_upstream_task_selector = (tasks) -> broker_task_selector(tasks, brokerid, false)  # get task with highest affinity for the broker
+        broker_from_downstream_task_selector = (tasks) -> broker_task_selector(tasks, brokerid, true) # get task with least affinity for the broker
         last_upstream = last_downstream = 0.0
+        
         while do_trigger[]
             #tasklog(env, "doing broker tasks")
             tnow = time()
@@ -287,24 +292,33 @@ end
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
 function master_schedule(env, execstages, scheduled, completed)
-    tasklog(env, "scheduling $(length(execstages)) entries")
+    tasklog(env, "scheduling $(length(execstages)) execstages entries")
     # filter out fully scheduled stages
     isempty(execstages) || filter!((task)->!(taskid(task) in scheduled), execstages)
 
     if !isempty(execstages)
-        schedulable = Vector{Tuple{Int,TaskIdType}}()
+        schedulable_depth = Vector{Int}()
+        schedulable_tids = Vector{TaskIdType}()
         for task in execstages
             # filter out child stages that are completed
             filter!(x->(isa(x, Thunk) && !(taskid(x) in completed)), task)
             # pick child stages that have no inputs or all inputs ready (indicated by the same condition)
             walk_dag(task, false) do x,d
-                !(taskid(x) in scheduled) && isempty(x.inputs) && push!(schedulable, (d,taskid(x)))
+                if isa(x, Thunk)
+                    tid = taskid(x)
+                    if !(tid in scheduled) && isempty(x.inputs)
+                        push!(schedulable_depth, d)
+                        push!(schedulable_tids, tid)
+                    end
+                end
                 nothing
             end
         end
-        tasklog(env, "found $(length(schedulable)) schedulable tasks")
+        tasklog(env, "found $(length(schedulable_tids)) schedulable tasks")
         # schedule for execution, in decreasing order of node depth
-        for (d,tid) in sort!(schedulable; lt=(x,y)->isless(x[1], y[1]), rev=true)
+        sp = sortperm(schedulable_depth; rev=true)
+        for idx in 1:length(sp)
+            tid = schedulable_tids[sp[idx]]
             if !(tid in scheduled)
                 keep(env, tid, 0, false)
                 push!(scheduled, tid)
@@ -314,7 +328,7 @@ function master_schedule(env, execstages, scheduled, completed)
     nothing
 end
 
-function runmaster(runenv::RunEnv, root_t::Thunk, execstages; debug::Bool=false)
+function runmaster(runenv::RunEnv, root_t::Thunk, execstages, costs::Vector; debug::Bool=false)
     rootpath = runenv.rootpath
     id = UInt64(myid())
     brokerid = runenv.masterid
@@ -324,6 +338,7 @@ function runmaster(runenv::RunEnv, root_t::Thunk, execstages; debug::Bool=false)
         env = (genv[])::ExecutionCtx
     end
     env.debug = debug
+    env.costs = costs
 
     completed = Vector{TaskIdType}()
     scheduled = Vector{TaskIdType}()
@@ -333,7 +348,7 @@ function runmaster(runenv::RunEnv, root_t::Thunk, execstages; debug::Bool=false)
 
     remotecall_wait(join_cluster, Int(id))
     started = false
-    @async while !started && !isready(start_cond)
+    @schedule while !started && !isready(start_cond)
         check_failures(runenv)
         sleep(0.01)
     end
@@ -345,9 +360,13 @@ function runmaster(runenv::RunEnv, root_t::Thunk, execstages; debug::Bool=false)
         root = taskid(root_t)
         tasklog(env, "started with ", root)
 
+        last_ncompleted = 0
         while !has_result(env.meta, root)
             # while critical path items exist, process them first
-            master_schedule(env, execstages, scheduled, completed)
+            if isempty(scheduled) || (length(completed) > last_ncompleted)
+                last_ncompleted = length(completed)
+                master_schedule(env, execstages, scheduled, completed)
+            end
             wait_trigger(env.meta)
             check_failures(runenv)
         end
@@ -489,7 +508,7 @@ function rundag(runenv::RunEnv, dag::Thunk)
     end
 
     #info("spawning master broker")
-    res = runmaster(runenv, dag, execstages; debug=runenv.debug)
+    res = runmaster(runenv, dag, execstages, costs; debug=runenv.debug)
 
     runenv.reset_task = @schedule wait_for_executors(runenv)
     profile_end(runenv.profile, "master_$(runenv.masterid)")

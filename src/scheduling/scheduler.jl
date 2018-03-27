@@ -7,7 +7,7 @@ import ..DagScheduler: Dagger, RunEnv, NodeEnv, Thunk, Chunk, DRef, FileRef, Com
 #-------------------------------------
 # Execution stages based on dependency
 #-------------------------------------
-function execution_stages(dag_node, deps=Dagger.dependents(dag_node), root=dag_node)
+function execution_stages(dag_node::Thunk, deps::Dict{Thunk, Set{Thunk}}=Dagger.dependents(dag_node), root::Thunk=dag_node)
     newinps = Set{Thunk}()
     for inp in dag_node.inputs
         if istask(inp)
@@ -29,12 +29,12 @@ function cost_for_node(node::NodeEnv, root_t::Thunk)
     nc
 end
 
-function extend_stages_by_affinity(runenv::RunEnv, stages::Vector{Thunk}, root_t::Thunk, costs::Vector{Pair{UInt64,Dict{TaskIdType,ComputeCost}}}, nodecap::Float64)
+function extend_stages_by_affinity(runenv::RunEnv, stages::Vector{Thunk}, root_t::Thunk, costs::Vector{Pair{UInt64,Dict{TaskIdType,ComputeCost}}}, nodecap::Float64, deps::Dict{Thunk, Set{Thunk}}=Dagger.dependents(root_t))
     for stage in stages
         #add_stages_by_compute_cost(stage, root_t, costs, nodecap)
 
         walk_dag(stage, false) do n,d
-            add_stages_by_compute_cost(n, root_t, costs, nodecap)
+            add_stages_by_compute_cost(n, root_t, costs, nodecap, deps)
         end
     end
     nothing
@@ -94,7 +94,7 @@ function insignificant_cost(total_costs, avg_node_capacity)
     (total_costs[1][2] <= (SPLIT_CAPACITY_RATIO * avg_node_capacity))   # total cost is not significant enough to split
 end
 
-function add_stages_by_compute_cost(staged_node::Thunk, full_dag::Thunk, costs::Vector{Pair{UInt64,Dict{TaskIdType,ComputeCost}}}, avg_node_capacity::Float64)
+function add_stages_by_compute_cost(staged_node::Thunk, full_dag::Thunk, costs::Vector{Pair{UInt64,Dict{TaskIdType,ComputeCost}}}, avg_node_capacity::Float64, deps::Dict{Thunk, Set{Thunk}})
     sn_tc, sn_cc = schedule_target(taskid(staged_node), costs)
     (insignificant_cost(sn_tc, avg_node_capacity) || strong_affinity(sn_cc)) && return
 
@@ -104,7 +104,7 @@ function add_stages_by_compute_cost(staged_node::Thunk, full_dag::Thunk, costs::
         istask(inp) && push!(stop_nodes, taskid(inp))
     end
 
-    let chld=Set{Thunk}(), start_node=find_node(full_dag, taskid(staged_node)), deps=Dagger.dependents(full_dag)
+    let chld=Set{Thunk}(), start_node=find_node(taskid(staged_node))
         walk_dag(start_node, false, stop_nodes) do n,d
             istask(n) || return
 

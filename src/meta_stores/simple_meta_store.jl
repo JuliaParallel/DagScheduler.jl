@@ -16,6 +16,7 @@ mutable struct SimpleExecutorMeta <: ExecutorMeta
     add_annotation::Function
     del_annotation::Function
     result_callback::Union{Function,Void}
+    cachingpool::Union{Base.Distributed.CachingPool, Void}
 
     function SimpleExecutorMeta(path::String, sharethreshold::Int)
         new(path, myid(),
@@ -23,7 +24,7 @@ mutable struct SimpleExecutorMeta <: ExecutorMeta
             Set{TaskIdType}(),
             ShareMode(sharethreshold),
             nothing,
-            identity, identity, nothing)
+            identity, identity, nothing, nothing)
     end
 end
 
@@ -37,6 +38,7 @@ function init(M::SimpleExecutorMeta, brokerid::Int; add_annotation=identity, del
     M.del_annotation = del_annotation
     M.result_callback = result_callback
     M.results_channel = brokercall(broker_register_for_results, M)
+    M.cachingpool = Base.Distributed.CachingPool([brokerid])
     donetasks = brokercall(broker_get_donetasks, M)::Set{TaskIdType}
     union!(M.donetasks, donetasks)
     nothing
@@ -107,6 +109,7 @@ function reset(M::SimpleExecutorMeta)
     reset(M.sharemode)
     empty!(M.proclocal)
     empty!(M.donetasks)
+    M.cachingpool = nothing
     M.results_channel = nothing
     M.add_annotation = identity
     M.del_annotation = identity
@@ -125,7 +128,7 @@ function share_task(M::SimpleExecutorMeta, id::TaskIdType, allow_dup::Bool)
 end
 
 function steal_task(M::SimpleExecutorMeta, selector=default_task_scheduler)
-    taskid = brokercall(broker_steal_task, M, selector)::TaskIdType
+    taskid = remotecall_fetch(broker_steal_task, M.cachingpool, selector)::TaskIdType
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 
