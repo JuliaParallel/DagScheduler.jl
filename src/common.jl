@@ -89,7 +89,10 @@ function taskexception(env, ex, bt)
 end
 
 function profile_init(prof::Bool, myid::String)
-    prof && Profile.start_timer()
+    if prof
+        Profile.init(10^7, 0.01)
+        Profile.start_timer()
+    end
 end
 
 function profile_end(prof::Bool, myid::String)
@@ -98,6 +101,7 @@ function profile_end(prof::Bool, myid::String)
         open("/tmp/$(myid).profile", "w") do f
             Profile.print(IOContext(f, :displaysize => (256, 1024)))
         end
+        Profile.clear()
     end
 end
 
