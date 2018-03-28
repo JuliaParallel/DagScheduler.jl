@@ -6,13 +6,11 @@ using BenchmarkTools
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
 @everywhere begin
-    meta = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
-    #meta = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
-    DagScheduler.META_IMPL[:node] = meta
-    DagScheduler.META_IMPL[:cluster] = meta
+    DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+    DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
 end
 
-node1 = NodeEnv(1, getipaddr(), [2,3,4,5,6])
+node1 = NodeEnv(2, getipaddr(), [3,4,5,6])
 runenv = RunEnv(; nodes=[node1])
 
 const L = 10^6
