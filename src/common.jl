@@ -89,7 +89,10 @@ function taskexception(env, ex, bt)
 end
 
 function profile_init(prof::Bool, myid::String)
-    prof && Profile.start_timer()
+    if prof
+        Profile.init(10^7, 0.01)
+        Profile.start_timer()
+    end
 end
 
 function profile_end(prof::Bool, myid::String)
@@ -98,6 +101,7 @@ function profile_end(prof::Bool, myid::String)
         open("/tmp/$(myid).profile", "w") do f
             Profile.print(IOContext(f, :displaysize => (256, 1024)))
         end
+        Profile.clear()
     end
 end
 
@@ -138,7 +142,9 @@ function walk_dag(fn, dag_node, update::Bool, stop_nodes=TaskIdType[], depth::In
         if update
             dag_node.inputs = map(x->walk_dag(fn, x, update, stop_nodes, depth+1), dag_node.inputs)
         else
-            map(x->walk_dag(fn, x, update, stop_nodes, depth+1), dag_node.inputs)
+            for inp in dag_node.inputs
+                walk_dag(fn, inp, update, stop_nodes, depth+1)
+            end
         end
     end
     fn(dag_node, depth)
@@ -146,9 +152,12 @@ end
 
 function filter!(fn, dag_node::Thunk)
     for inp in dag_node.inputs
-        filter!(fn, inp)
+        isa(inp, Thunk) && filter!(fn, inp)
     end
-    dag_node.inputs = tuple(filter!(fn, collect(dag_node.inputs))...)
+    newinputs = filter!(fn, collect(dag_node.inputs))
+    if length(newinputs) < length(dag_node.inputs)
+        dag_node.inputs = tuple(newinputs...)
+    end
     dag_node
 end
 
@@ -172,6 +181,7 @@ function find_node(dag_node, id::TaskIdType)
         walk_dag(f, dag_node, false)
     end
 end
+find_node(id::TaskIdType) = Dagger._thunk_dict[id]
 
 ischild(dag_node, id::TaskIdType) = (nothing !== find_node(dag_node, id))
 

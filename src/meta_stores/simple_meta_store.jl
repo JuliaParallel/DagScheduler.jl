@@ -13,18 +13,18 @@ mutable struct SimpleExecutorMeta <: ExecutorMeta
     donetasks::Set{TaskIdType}
     sharemode::ShareMode
     results_channel::Union{Void,RemoteChannel{Channel{Tuple{String,String}}}}
-    gen::Int
     add_annotation::Function
     del_annotation::Function
     result_callback::Union{Function,Void}
+    cachingpool::Union{Base.Distributed.CachingPool, Void}
 
     function SimpleExecutorMeta(path::String, sharethreshold::Int)
         new(path, myid(),
             Dict{String,Any}(),
             Set{TaskIdType}(),
             ShareMode(sharethreshold),
-            nothing, 0,
-            identity, identity, nothing)
+            nothing,
+            identity, identity, nothing, nothing)
     end
 end
 
@@ -34,11 +34,11 @@ end
 
 function init(M::SimpleExecutorMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.brokerid = brokerid
-    M.gen = 0
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
     M.result_callback = result_callback
     M.results_channel = brokercall(broker_register_for_results, M)
+    M.cachingpool = Base.Distributed.CachingPool([brokerid])
     donetasks = brokercall(broker_get_donetasks, M)::Set{TaskIdType}
     union!(M.donetasks, donetasks)
     nothing
@@ -49,11 +49,14 @@ function process_trigger(M::SimpleExecutorMeta, k::String, v::String)
         # ignore
     elseif k == SHAREMODE_KEY
         ncreated,ndeleted = meta_deser(v)
-        if (ncreated > M.sharemode.ncreated) || (ndeleted > M.sharemode.ndeleted)
-            M.sharemode.nshared = ncreated - ndeleted
-            M.sharemode.ncreated = ncreated
-            M.sharemode.ndeleted = ndeleted
+        S = M.sharemode
+        if ncreated > S.ncreated
+            S.ncreated = ncreated
         end
+        if ndeleted > S.ndeleted
+            S.ndeleted = ndeleted
+        end
+        S.nshared = ncreated - ndeleted
     else
         val, refcount = meta_deser(v)
         M.proclocal[k] = val
@@ -106,11 +109,11 @@ function reset(M::SimpleExecutorMeta)
     reset(M.sharemode)
     empty!(M.proclocal)
     empty!(M.donetasks)
+    M.cachingpool = nothing
     M.results_channel = nothing
     M.add_annotation = identity
     M.del_annotation = identity
     M.result_callback = nothing
-    M.gen = 0
     
     nothing
 end
@@ -125,7 +128,7 @@ function share_task(M::SimpleExecutorMeta, id::TaskIdType, allow_dup::Bool)
 end
 
 function steal_task(M::SimpleExecutorMeta, selector=default_task_scheduler)
-    taskid = brokercall(broker_steal_task, M, selector)::TaskIdType
+    taskid = remotecall_fetch(broker_steal_task, M.cachingpool, selector)::TaskIdType
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 
@@ -232,14 +235,10 @@ function broker_steal_task(selector)
 end
 
 function broker_send_sharestats(M)
-    gen = M.gen
     @schedule begin
-        if M.gen <= gen
-            M.gen = gen + 1
-            sm = M.sharemode
-            c,d = sm.ncreated,sm.ndeleted
-            put!(RESULTS, (SHAREMODE_KEY, meta_ser((c,d))))
-        end
+        sm = M.sharemode
+        c,d = sm.ncreated,sm.ndeleted
+        put!(RESULTS, (SHAREMODE_KEY, meta_ser((c,d))))
     end
     nothing
 end
