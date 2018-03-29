@@ -3,6 +3,7 @@ module DagScheduler
 
 using Dagger
 using MemPool
+using RemoteMonitor
 
 import Dagger: istask, inputs, Chunk, cleanup
 import Base: delete!, filter!, +, /, isless

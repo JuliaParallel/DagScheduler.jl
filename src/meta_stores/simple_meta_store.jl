@@ -121,18 +121,18 @@ end
 function cleanup(M::SimpleExecutorMeta)
 end
 
-function share_task(M::SimpleExecutorMeta, id::TaskIdType, allow_dup::Bool)
+@timetrack function share_task(M::SimpleExecutorMeta, id::TaskIdType, allow_dup::Bool)
     annotated_task = M.add_annotation(id)
     brokercall(broker_share_task, M, id, annotated_task, allow_dup)
     nothing
 end
 
-function steal_task(M::SimpleExecutorMeta, selector=default_task_scheduler)
+@timetrack function steal_task(M::SimpleExecutorMeta, selector=default_task_scheduler)
     taskid = remotecall_fetch(broker_steal_task, M.cachingpool, selector)::TaskIdType
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 
-function set_result(M::SimpleExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
+@timetrack function set_result(M::SimpleExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
     process_triggers(M)
     k = resultpath(M, id)
     M.proclocal[k] = val
@@ -144,7 +144,7 @@ function set_result(M::SimpleExecutorMeta, id::TaskIdType, val; refcount::UInt64
     nothing
 end
 
-function get_result(M::SimpleExecutorMeta, id::TaskIdType)
+@timetrack function get_result(M::SimpleExecutorMeta, id::TaskIdType)
     process_triggers(M)
     k = resultpath(M, id)
     if k in keys(M.proclocal)
@@ -166,7 +166,7 @@ function decr_result_ref(M::SimpleExecutorMeta, id::TaskIdType)
     2
 end
 
-function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
+@timetrack function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
 
