@@ -1,7 +1,7 @@
 #------------------------------------------------------------------
 # helper methods for the executor
 #------------------------------------------------------------------
-function wait_for_executors(runenv::RunEnv)
+@timetrack function wait_for_executors(runenv::RunEnv)
     @sync for node in runenv.nodes
         @async begin
             empty!(node.last_task_stat)
@@ -18,6 +18,8 @@ function wait_for_executors(runenv::RunEnv)
     end
 
     delete_meta(runenv.masterid, runenv.nodes, runenv.rootpath)
+    remotetrack_end(runenv.remotetrack)
+    profile_end(runenv.profile, "master_$(runenv.masterid)")
     nothing
 end
 
@@ -192,13 +194,13 @@ function broker_tasks(upenv::ExecutionCtx, env::ExecutionCtx, unified_trigger::C
             from_upstream = needed_downstream && have_upstream && ((tnow - last_downstream) > 0.5)
             from_downstream = needed_upstream && !needed_downstream && have_downstream && ((tnow - last_upstream) > 0.5)
 
-            tasklog(env, "up,down | shared($(upstat.nshared),$(downstat.nshared)) created($(upstat.ncreated),$(downstat.ncreated)) del($(upstat.ndeleted),$(downstat.ndeleted)) share($(needed_upstream),$(needed_downstream))")
+            tasklog(env, "up,down | shared(", upstat.nshared, ",", downstat.nshared, ") created(", upstat.ncreated, ",", downstat.ncreated, ") del(", upstat.ndeleted, ",", downstat.ndeleted, ") share(", needed_upstream, ",", needed_downstream, ")")
 
             if from_upstream
                 tasklog(env, "bring new upstream tasks into local node")
                 # bring new upstream tasks into local node
                 task = hascosts ? steal(upenv, broker_from_upstream_task_selector) : steal(upenv)
-                tasklog(env, (task === NoTask) ? "stole NoTask" : "stole $task")
+                tasklog(env, "stole ", (task === NoTask) ? "NoTask" : string(task))
                 if task !== NoTask
                     enqueue(env, task, false, true)
                     from_downstream = false
@@ -210,7 +212,7 @@ function broker_tasks(upenv::ExecutionCtx, env::ExecutionCtx, unified_trigger::C
                 tasklog(env, "export shared node tasks to upstream brokers")
                 # export shared node tasks to upstream brokers
                 task = hascosts ? steal(env, broker_from_downstream_task_selector) : steal(env)
-                tasklog(env, (task === NoTask) ? "stole NoTask" : "stole $task")
+                tasklog(env, "stole ", (task === NoTask) ? "NoTask" : string(task))
                 if task !== NoTask
                     enqueue(upenv, task, false, true)
                     last_downstream = tnow
@@ -237,8 +239,9 @@ end
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
 function runbroker(rootpath::String, id::UInt64, upstream_brokerid::UInt64, root_t::Thunk, costs::Vector;
-        debug::Bool=false, profile::Bool=false, upstream_help_threshold::Int=typemax(Int), downstream_help_threshold::Int=typemax(Int))
+        debug::Bool=false, remotetrack::Bool=false, profile::Bool=false, upstream_help_threshold::Int=typemax(Int), downstream_help_threshold::Int=typemax(Int))
     profile_init(profile, "broker_$(id)")
+    remotetrack_init(remotetrack)
     if genv[] === nothing
         env = genv[] = ExecutionCtx(META_IMPL[:node], rootpath, id, id, :broker, downstream_help_threshold; debug=debug)
     else
@@ -252,7 +255,9 @@ function runbroker(rootpath::String, id::UInt64, upstream_brokerid::UInt64, root
     end
 
     env.debug = debug
+    env.remotetrack = remotetrack
     upenv.debug = debug
+    upenv.remotetrack = remotetrack
     init(env, root_t; result_callback=(task,res)->local_result_to_upstream(upenv,task,res))
     init(upenv, root_t; result_callback=(task,res)->upstream_result_to_local(env,task,res))
     env.costs = upenv.costs = costs
@@ -281,9 +286,10 @@ function runbroker(rootpath::String, id::UInt64, upstream_brokerid::UInt64, root
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
     finally
-        async_reset(env)
-        async_reset(upenv)
+        remotetrack_end(remotetrack)
         profile_end(profile, "broker_$(id)")
+        reset(env)
+        reset(upenv)
     end
 end
 
@@ -292,7 +298,7 @@ end
 # by stealing spare tasks from all peers and letting peers steal
 #--------------------------------------------------------------------
 function master_schedule(env, execstages, scheduled, completed)
-    tasklog(env, "scheduling $(length(execstages)) execstages entries")
+    tasklog(env, "scheduling ", length(execstages), " execstages entries")
     # filter out fully scheduled stages
     isempty(execstages) || filter!((task)->!(taskid(task) in scheduled), execstages)
 
@@ -314,7 +320,7 @@ function master_schedule(env, execstages, scheduled, completed)
                 nothing
             end
         end
-        tasklog(env, "found $(length(schedulable_tids)) schedulable tasks")
+        tasklog(env, "found ", length(schedulable_tids), " schedulable tasks")
         # schedule for execution, in decreasing order of node depth
         sp = sortperm(schedulable_depth; rev=true)
         for idx in 1:length(sp)
@@ -328,7 +334,7 @@ function master_schedule(env, execstages, scheduled, completed)
     nothing
 end
 
-function runmaster(runenv::RunEnv, root_t::Thunk, execstages, costs::Vector; debug::Bool=false)
+function runmaster(runenv::RunEnv, root_t::Thunk, execstages, costs::Vector; debug::Bool=false, remotetrack::Bool=false)
     rootpath = runenv.rootpath
     id = UInt64(myid())
     brokerid = runenv.masterid
@@ -338,6 +344,7 @@ function runmaster(runenv::RunEnv, root_t::Thunk, execstages, costs::Vector; deb
         env = (genv[])::ExecutionCtx
     end
     env.debug = debug
+    env.remotetrack = remotetrack
     env.costs = costs
 
     completed = Vector{TaskIdType}()
@@ -378,19 +385,21 @@ function runmaster(runenv::RunEnv, root_t::Thunk, execstages, costs::Vector; deb
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
     finally
-        async_reset(env)
+        reset(env)
     end
 end
 
 function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, masterid::UInt64, root_t::Thunk;
-        debug::Bool=false, profile::Bool=false, help_threshold::Int=typemax(Int))
+        debug::Bool=false, remotetrack::Bool=false, profile::Bool=false, help_threshold::Int=typemax(Int))
     profile_init(profile, "executor_$(brokerid)_$(id)")
+    remotetrack_init(remotetrack)
     if genv[] === nothing
         env = genv[] = ExecutionCtx(META_IMPL[:node], rootpath, id, brokerid, :executor, help_threshold; debug=debug)
     else
         env = (genv[])::ExecutionCtx
     end
     env.debug = debug
+    env.remotetrack = remotetrack
     tasklog(env, "starting")
     init(env, root_t)
     remotecall_wait(join_cluster, Int(masterid))
@@ -437,15 +446,15 @@ function runexecutor(rootpath::String, id::UInt64, brokerid::UInt64, masterid::U
             end
         end
         tasklog(env, "stole ", env.nstolen, ", shared ", env.nshared, ", completed ", env.nexecuted, " tasks")
+        return (env.nstolen, env.nshared, env.nexecuted)
     catch ex
         taskexception(env, ex, catch_backtrace())
         rethrow(ex)
     finally
-        async_reset(env)
+        remotetrack_end(remotetrack)
         profile_end(profile, "executor_$(brokerid)_$(id)")
+        reset(env)
     end
-    #tasklog(env, "done")
-    (env.nstolen, env.nshared, env.nexecuted)
 end
 
 function cleanup(runenv::RunEnv)
@@ -465,6 +474,7 @@ end
 
 function rundag(runenv::RunEnv, dag::Thunk)
     profile_init(runenv.profile, "master_$(runenv.masterid)")
+    remotetrack_init(runenv.remotetrack)
     #=
     dag, _elapsedtime, _bytes, _gctime, _memallocs = @timed begin
         dref_to_fref(dag)
@@ -493,7 +503,7 @@ function rundag(runenv::RunEnv, dag::Thunk)
             executorid = node.executorids[idx]
             #info("spawning executor $executorid")
             join_count[] += 1
-            executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, node.brokerid, runenv.masterid, dag; debug=runenv.debug, profile=runenv.profile, help_threshold=help_threshold)
+            executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, node.brokerid, runenv.masterid, dag; debug=runenv.debug, remotetrack=runenv.remotetrack, profile=runenv.profile, help_threshold=help_threshold)
             push!(node.executor_tasks, executor_task)
         end
 
@@ -501,16 +511,15 @@ function rundag(runenv::RunEnv, dag::Thunk)
             #info("spawning broker $(node.brokerid)")
             join_count[] += 1
             node.broker_task = @spawnat node.brokerid runbroker(runenv.rootpath, node.brokerid, runenv.masterid, dag, costs;
-                debug=runenv.debug, profile=runenv.profile,
+                debug=runenv.debug, remotetrack=runenv.remotetrack, profile=runenv.profile,
                 upstream_help_threshold=upstream_help_threshold,
                 downstream_help_threshold=help_threshold)
         end
     end
 
     #info("spawning master broker")
-    res = runmaster(runenv, dag, execstages, costs; debug=runenv.debug)
+    res = runmaster(runenv, dag, execstages, costs; debug=runenv.debug, remotetrack=runenv.remotetrack)
 
     runenv.reset_task = @schedule wait_for_executors(runenv)
-    profile_end(runenv.profile, "master_$(runenv.masterid)")
     res
 end

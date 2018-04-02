@@ -29,8 +29,9 @@ mutable struct RunEnv
     reset_task::Union{Task,Void}
     debug::Bool
     profile::Bool
+    remotetrack::Bool
 
-    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false, profile::Bool=false)
+    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false, profile::Bool=false, remotetrack::Bool=false)
         nexecutors = 0
         for node in nodes
             nw = length(node.executorids)
@@ -45,7 +46,7 @@ mutable struct RunEnv
         @everywhere MemPool.enable_who_has_read[] = false
         @everywhere Dagger.use_shared_array[] = false
 
-        new(rootpath, masterid, nodes, nothing, debug, profile)
+        new(rootpath, masterid, nodes, nothing, debug, profile, remotetrack)
     end
 end
 
@@ -79,6 +80,8 @@ mean_node_capacity(runenv::RunEnv) = mean([length(node.executorids)*1 for node i
 #------------------------------------
 function tasklog(env, msg...)
     env.debug && info(now(), " ", env.role, " : ", env.id, " : ", env.brokerid, " : ", msg...)
+    env.remotetrack && logmsg(Symbol("t"*string(object_id(current_task()))), now(), " ", env.role, " : ", env.id, " : ", env.brokerid, " : ", msg...)
+    nothing
 end
 
 function taskexception(env, ex, bt)
@@ -93,6 +96,7 @@ function profile_init(prof::Bool, myid::String)
         Profile.init(10^7, 0.01)
         Profile.start_timer()
     end
+    nothing
 end
 
 function profile_end(prof::Bool, myid::String)
@@ -103,6 +107,17 @@ function profile_end(prof::Bool, myid::String)
         end
         Profile.clear()
     end
+    nothing
+end
+
+function remotetrack_init(remotetrack::Bool)
+    remotetrack && start_sender()
+    nothing
+end
+
+function remotetrack_end(remotetrack::Bool)
+    remotetrack && stop_sender()
+    nothing
 end
 
 #------------------------------------

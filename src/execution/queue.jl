@@ -16,8 +16,9 @@ mutable struct ExecutionCtx
     taskidmap::Dict{TaskIdType,Thunk}           # for quick lookup
     costs::Union{Vector,Void}                   # optional task costs per broker
     debug::Bool                                 # switch on debug logging
+    remotetrack::Bool                           # switch on remote tracking
 
-    function ExecutionCtx(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; costs=nothing, debug::Bool=false)
+    function ExecutionCtx(metastore_impl::String, rootpath::String, id::UInt64, brokerid::UInt64, role::Symbol, help_threshold::Int; costs=nothing, debug::Bool=false, remotetrack::Bool=false)
         broker_rootpath = joinpath(rootpath, string(brokerid))
         new(id, brokerid, rootpath, role,
             metastore(metastore_impl, broker_rootpath, help_threshold),
@@ -25,7 +26,7 @@ mutable struct ExecutionCtx
             Set{TaskIdType}(),
             Set{TaskIdType}(),
             0, 0, 0, nothing, Dict{Thunk,Set{Thunk}}(),
-            nothing, Dict{TaskIdType,Thunk}(), costs, debug)
+            nothing, Dict{TaskIdType,Thunk}(), costs, debug, remotetrack)
     end
 end
 
@@ -271,7 +272,7 @@ function reserve_to_share(env::ExecutionCtx)
     if task_to_move !== NoTask
         dequeue(env, task_to_move)
         enqueue(env, task_to_move, false)
-        tasklog(env, "moved $task_to_move from reserved to shared, expanded: ", (task_to_move in env.expanded), " stolen: ", (task_to_move in env.stolen))
+        tasklog(env, "moved ", string(task_to_move), " from reserved to shared, expanded: ", (task_to_move in env.expanded), " stolen: ", (task_to_move in env.stolen))
     end
     nothing
 end

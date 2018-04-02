@@ -125,7 +125,7 @@ import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
-        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector, @timetrack, statetrack, logmsg
 
 export ShmemExecutorMeta
 
@@ -144,7 +144,7 @@ import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
-        export_local_result, repurpose_result_to_export, default_task_selector
+        export_local_result, repurpose_result_to_export, default_task_selector, @timetrack, statetrack, logmsg
 
 export EtcdExecutorMeta
 
@@ -161,7 +161,7 @@ import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
         take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
-        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector, @timetrack, statetrack, logmsg
 
 export SimpleExecutorMeta
 
@@ -170,13 +170,22 @@ const Results = BcastChannel{Tuple{String,String}}
 const META = Dict{String,String}()
 const TASKS = Vector{TaskIdType}()
 const RESULTS = Results()
-const taskmutex = Ref(Mutex())
+const taskmutex = Channel{Bool}(1)
 
 include("simple_meta_store.jl")
 
 function __init__()
-    taskmutex[] = Mutex()
+    put!(taskmutex, true)
     nothing
+end
+
+function withtaskmutex(f)
+    l = take!(taskmutex)
+    try
+        return f()
+    finally
+        put!(taskmutex, l)
+    end
 end
 
 end # module SimpleMeta
