@@ -170,13 +170,22 @@ const Results = BcastChannel{Tuple{String,String}}
 const META = Dict{String,String}()
 const TASKS = Vector{TaskIdType}()
 const RESULTS = Results()
-const taskmutex = Ref(Mutex())
+const taskmutex = Channel{Bool}(1)
 
 include("simple_meta_store.jl")
 
 function __init__()
-    taskmutex[] = Mutex()
+    put!(taskmutex, true)
     nothing
+end
+
+function withtaskmutex(f)
+    l = take!(taskmutex)
+    try
+        return f()
+    finally
+        put!(taskmutex, l)
+    end
 end
 
 end # module SimpleMeta

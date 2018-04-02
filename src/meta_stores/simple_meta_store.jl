@@ -133,7 +133,6 @@ end
 end
 
 @timetrack function set_result(M::SimpleExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
-    process_triggers(M)
     k = resultpath(M, id)
     M.proclocal[k] = val
     if !processlocal
@@ -145,7 +144,6 @@ end
 end
 
 @timetrack function get_result(M::SimpleExecutorMeta, id::TaskIdType)
-    process_triggers(M)
     k = resultpath(M, id)
     if k in keys(M.proclocal)
         M.proclocal[k]
@@ -182,15 +180,6 @@ end
 # --------------------------------------------------
 # methods invoked at the broker
 # --------------------------------------------------
-function withtaskmutex(f)
-    lock(taskmutex[])
-    try
-        return f()
-    finally
-        unlock(taskmutex[])
-    end
-end
-
 function broker_has_result(k)
     k in keys(META)
 end
