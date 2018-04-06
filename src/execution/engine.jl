@@ -491,19 +491,20 @@ function rundag(runenv::RunEnv, dag::Thunk)
     end
 
     upstream_help_threshold = length(runenv.nodes) - 1
+    executor_help_threshold = sum(length(node.executorids) for node in runenv.nodes)
     join_count[] = 1 # start with 1 for the master
     while isready(start_cond)
         take!(start_cond)
     end
 
     for node in runenv.nodes
-        help_threshold = length(node.executorids) - 1
+        downstream_help_threshold = length(node.executorids) - 1
 
         for idx in 1:length(node.executorids)
             executorid = node.executorids[idx]
             #info("spawning executor $executorid")
             join_count[] += 1
-            executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, node.brokerid, runenv.masterid, dag; debug=runenv.debug, remotetrack=runenv.remotetrack, profile=runenv.profile, help_threshold=help_threshold)
+            executor_task = @spawnat executorid runexecutor(runenv.rootpath, executorid, node.brokerid, runenv.masterid, dag; debug=runenv.debug, remotetrack=runenv.remotetrack, profile=runenv.profile, help_threshold=executor_help_threshold)
             push!(node.executor_tasks, executor_task)
         end
 
@@ -513,7 +514,7 @@ function rundag(runenv::RunEnv, dag::Thunk)
             node.broker_task = @spawnat node.brokerid runbroker(runenv.rootpath, node.brokerid, runenv.masterid, dag, costs;
                 debug=runenv.debug, remotetrack=runenv.remotetrack, profile=runenv.profile,
                 upstream_help_threshold=upstream_help_threshold,
-                downstream_help_threshold=help_threshold)
+                downstream_help_threshold=downstream_help_threshold)
         end
     end
 
