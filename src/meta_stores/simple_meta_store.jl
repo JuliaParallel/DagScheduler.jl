@@ -164,7 +164,7 @@ function decr_result_ref(M::SimpleExecutorMeta, id::TaskIdType)
     2
 end
 
-@timetrack function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
+function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
 
