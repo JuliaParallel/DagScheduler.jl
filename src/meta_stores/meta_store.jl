@@ -82,10 +82,10 @@ end
 
 default_task_selector(x) = 1
 
-resultroot{T<:ExecutorMeta}(M::T) = joinpath(M.path, "result")
+resultroot{T<:ExecutorMeta}(M::T) = joinpath(M.path, "R")
 resultpath{T<:ExecutorMeta}(M::T, id::TaskIdType) = joinpath(resultroot(M), string(id))
-sharepath{T<:ExecutorMeta}(M::T, id::TaskIdType) = joinpath(M.path, "shared", string(id))
-taskpath{T<:ExecutorMeta}(M::T) = joinpath(M.path, "broker", string(M.brokerid))
+sharepath{T<:ExecutorMeta}(M::T, id::TaskIdType) = joinpath(M.path, "S", string(id))
+taskpath{T<:ExecutorMeta}(M::T) = joinpath(M.path, "B", string(M.brokerid))
 
 should_share{T<:ExecutorMeta}(M::T) = should_share(M.sharemode)
 should_share{T<:ExecutorMeta}(M::T, nreserved::Int) = should_share(M.sharemode, nreserved)

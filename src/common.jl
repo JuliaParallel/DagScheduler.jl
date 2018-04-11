@@ -31,7 +31,7 @@ mutable struct RunEnv
     profile::Bool
     remotetrack::Bool
 
-    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=[NodeEnv(masterid,getipaddr(),workers())], debug::Bool=false, profile::Bool=false, remotetrack::Bool=false)
+    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=setup_nodes(masterid), debug::Bool=false, profile::Bool=false, remotetrack::Bool=false)
         nexecutors = 0
         for node in nodes
             nw = length(node.executorids)
@@ -118,6 +118,74 @@ end
 function remotetrack_end(remotetrack::Bool)
     remotetrack && stop_sender()
     nothing
+end
+
+#------------------------------------
+# Topology utilities
+#------------------------------------
+function worker_distribution()
+    d = Dict{IPv4,Vector{Int}}()
+    for w in Base.Distributed.PGRP.workers
+        wip = IPv4(isa(w, Base.Distributed.Worker) ? get(w.config.bind_addr) : w.bind_addr)
+        if wip in keys(d)
+            push!(d[wip], w.id)
+        else
+            d[wip] = [w.id]
+        end
+    end
+
+    # disambiguate localhost
+    loc = ip"127.0.0.1"
+    if loc in keys(d)
+        realip = remotecall_fetch(getipaddr, first(d[loc]))
+        if realip in keys(d)
+            append!(d[realip], d[loc])
+        else
+            d[realip] = d[loc]
+        end
+        delete!(d, loc)
+    end
+    d
+end
+
+function setup_nodes(master=1)
+    wd = worker_distribution()
+    frefservers = Dict{IPv4,Vector{Int}}()
+
+    if length(wd) == 1
+        # only one node. make master the broker and use shm meta_store
+        @everywhere begin
+            DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+            DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+        end
+        executors = first(values(wd))
+        splice!(executors, findfirst(executors, master))
+        nodes = [NodeEnv(master, first(keys(wd)), executors)]
+        frefservers[first(keys(wd))] = [master]
+    else
+        # multiple nodes. select one broker on each node (minimum pid on each group is the broker)
+        @everywhere begin
+            DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+            DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
+        end
+        nodes = NodeEnv[]
+        for (ip,wrkrs) in wd
+            sort!(filter!(w->w!=master, wrkrs))
+            brokerid = shift!(wrkrs)
+            push!(nodes, NodeEnv(brokerid, ip, wrkrs))
+            frefservers[ip] = [brokerid]
+        end
+    end
+
+    @sync for w in procs()
+        @async remotecall_wait(w) do
+            MemPool.enable_random_fref_serve[] = false
+            empty!(MemPool.wrkrips)
+            merge!(MemPool.wrkrips, frefservers)
+        end
+    end
+
+    nodes
 end
 
 #------------------------------------

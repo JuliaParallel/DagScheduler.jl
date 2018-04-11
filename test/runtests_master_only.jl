@@ -5,13 +5,14 @@ using DagScheduler
 using Base.Test
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
-@everywhere begin
-    DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
-    DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
-end
-
-node1 = NodeEnv(1, getipaddr(), [2,3,4,5,6])
-runenv = RunEnv(; nodes=[node1])
+#@everywhere begin
+#    DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+#    DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+#end
+#
+#node1 = NodeEnv(1, getipaddr(), [2,3,4,5,6])
+#runenv = RunEnv(; nodes=[node1])
+runenv = RunEnv()
 
 @testset "deep dag" begin
     info("Testing deep dag...")
