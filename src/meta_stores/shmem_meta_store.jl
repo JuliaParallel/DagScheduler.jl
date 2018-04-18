@@ -1,6 +1,7 @@
 # scheduler metadata store
 
-const MAP_NUM_ENTRIES = 1024*5     # max number of results to store in shared dict
+#const MAP_NUM_ENTRIES = 1024*5     # max number of results to store in shared dict
+const MAP_NUM_ENTRIES = 1024*100  # max number of results to store in shared dict
 const MAP_ENTRY_SZ = 256           # max size of each result stored in shared dict
 const DONE_TASKS_SZ = 1024*100     # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))
 const SHARED_TASKS_SZ = 1024*100   # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))

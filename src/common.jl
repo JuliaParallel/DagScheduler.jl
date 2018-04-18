@@ -171,9 +171,13 @@ function setup_nodes(master=1)
         nodes = NodeEnv[]
         for (ip,wrkrs) in wd
             sort!(filter!(w->w!=master, wrkrs))
-            brokerid = shift!(wrkrs)
-            push!(nodes, NodeEnv(brokerid, ip, wrkrs))
-            frefservers[ip] = [brokerid]
+            if !isempty(wrkrs)
+                brokerid = shift!(wrkrs)
+                push!(nodes, NodeEnv(brokerid, ip, wrkrs))
+                frefservers[ip] = [brokerid]
+            else
+                frefservers[ip] = [master]
+            end
         end
     end
 
