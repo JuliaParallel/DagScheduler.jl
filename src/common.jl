@@ -32,22 +32,49 @@ mutable struct RunEnv
     remotetrack::Bool
 
     function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=setup_nodes(masterid), debug::Bool=false, profile::Bool=false, remotetrack::Bool=false)
-        nexecutors = 0
-        for node in nodes
-            nw = length(node.executorids)
-            (nw > 1) || error("need at least two workers on each node")
-            nexecutors += nw
-        end
-        (nexecutors > 1) || error("need at least two workers")
-
-        # ensure clean paths
-        delete_meta(UInt64(masterid), nodes, rootpath)
-
-        @everywhere MemPool.enable_who_has_read[] = false
-        @everywhere Dagger.use_shared_array[] = false
-
-        new(rootpath, masterid, nodes, nothing, debug, profile, remotetrack)
+        env = new(rootpath, masterid, nodes, nothing, debug, profile, remotetrack)
+        reset(env, nodes)
+        env
     end
+end
+
+function reset(env::RunEnv, nodes::Vector{NodeEnv}=setup_nodes(env.masterid))
+    env.nodes = nodes
+    nexecutors = 0
+    for node in nodes
+        nw = length(node.executorids)
+        (nw > 1) || error("need at least two workers on each node")
+        nexecutors += nw
+    end
+    (nexecutors > 1) || error("need at least two workers")
+
+    # ensure clean paths
+    delete_meta(UInt64(env.masterid), nodes, env.rootpath)
+
+    @everywhere begin
+        MemPool.enable_who_has_read[] = false
+        empty!(MemPool.wrkrips)
+        Dagger.use_shared_array[] = false
+    end
+
+    nothing
+end
+
+function show(io::IO, env::RunEnv)
+    attribs = []
+    env.debug && push!(attribs, "debug")
+    env.profile && push!(attribs, "profile")
+    env.remotetrack && push!(attribs, "remotetrack")
+    print(io, "RunEnv", isempty(attribs) ? "" : (" (" * join(attribs, ", ") * ")"))
+    for node in env.nodes
+        print(io, "\n ↳ ", node)
+    end
+    nothing
+end
+
+function show(io::IO, node::NodeEnv)
+    print(io, node.host, " [", node.brokerid, " ⇄ ", join(map(string, node.executorids), ","), "]")
+    nothing
 end
 
 struct ComputeCost
@@ -155,6 +182,9 @@ function setup_nodes(master=1)
     if length(wd) == 1
         # only one node. make master the broker and use shm meta_store
         @everywhere begin
+            eval(:(using DagScheduler))
+            eval(:(using Dagger))
+            eval(:(using MemPool))
             DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
             DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
         end
@@ -165,6 +195,9 @@ function setup_nodes(master=1)
     else
         # multiple nodes. select one broker on each node (minimum pid on each group is the broker)
         @everywhere begin
+            eval(:(using DagScheduler))
+            eval(:(using Dagger))
+            eval(:(using MemPool))
             DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
             DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
         end
@@ -173,7 +206,8 @@ function setup_nodes(master=1)
             sort!(filter!(w->w!=master, wrkrs))
             if !isempty(wrkrs)
                 brokerid = shift!(wrkrs)
-                push!(nodes, NodeEnv(brokerid, ip, wrkrs))
+                # include a node only if it has at least 2 executors
+                (length(wrkrs) > 1) && push!(nodes, NodeEnv(brokerid, ip, wrkrs))
                 frefservers[ip] = [brokerid]
             else
                 frefservers[ip] = [master]
@@ -287,3 +321,25 @@ dref_to_fref!(dag) = walk_dag(dag, true) do node,depth
         node
     end
 end
+
+#=
+tolerating node failures and dynamic node additions
+
+- monitor task periodically takes stock of process list
+- if new processes are added
+    - marks RunEnv as stale (should be reconstructed next time)
+- if any processes are removed
+    - marks RunEnv as stale
+    - determines the node to which the process belongs
+    - if it belonged to a valid node
+        - find the broker or in its absence, one of the executors
+        - remove broker from master pinger
+        - if found
+            - send a cleanup message
+            - rmproc all workers on that node
+        - determine tasks the broker was executing and reschedule them
+        - remove node from runenv
+
+
+On next run, recreate nodes if runenv is marked stale.
+=#

@@ -105,7 +105,7 @@ function cleanup_meta(metaimpl::String, rootpath::String, brokerid::Integer)
     broker_rootpath = joinpath(rootpath, string(brokerid))
     M = metastore(metaimpl, broker_rootpath, 0)
     M.brokerid = brokerid
-    cleanup(M)
+    DagScheduler.cleanup(M)
     nothing
 end
 

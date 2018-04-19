@@ -5,13 +5,6 @@ using DagScheduler
 using Base.Test
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
-#@everywhere begin
-#    DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
-#    DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
-#end
-#
-#node1 = NodeEnv(1, getipaddr(), [2,3,4,5,6])
-#runenv = RunEnv(; nodes=[node1])
 runenv = RunEnv()
 
 @testset "deep dag" begin
@@ -68,7 +61,7 @@ end
     DagScheduler.print_stats(runenv)
 end
 
-cleanup(runenv)
+DagScheduler.cleanup(runenv)
 isdir(".mempool") && rm(".mempool"; recursive=true)
 
 node1 = NodeEnv(1, getipaddr(), [2,4,6])
@@ -84,5 +77,5 @@ runenv = RunEnv(; nodes=[node1])
     DagScheduler.print_stats(runenv)
 end
 
-cleanup(runenv)
+DagScheduler.cleanup(runenv)
 isdir(".mempool") && rm(".mempool"; recursive=true)
