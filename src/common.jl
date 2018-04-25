@@ -22,26 +22,40 @@ mutable struct NodeEnv
     end
 end
 
+# NodeEnv list, optionally accompanied by the nodehash
+const NodeEnvList = Union{Vector{NodeEnv},Tuple{UInt64,Vector{NodeEnv}}}
+
 mutable struct RunEnv
-    rootpath::String
+    rootpath::String                # metadata path to work with
     masterid::UInt64
-    nodes::Vector{NodeEnv}
-    reset_task::Union{Task,Void}
+    nodes::Vector{NodeEnv}          # process tree with designated brokers and executors
+    nodehash::UInt64                # used to detect changes in process tree
+    reset_task::Union{Task,Void}    # async reset task fired after each run
     debug::Bool
     profile::Bool
     remotetrack::Bool
 
-    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=setup_nodes(masterid), debug::Bool=false, profile::Bool=false, remotetrack::Bool=false)
-        env = new(rootpath, masterid, nodes, nothing, debug, profile, remotetrack)
+    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::NodeEnvList=setup_nodes(masterid), debug::Bool=false, profile::Bool=false, remotetrack::Bool=false)
+        env = new(rootpath, masterid, Vector{NodeEnv}(), 0, nothing, debug, profile, remotetrack)
         reset(env, nodes)
         env
     end
 end
 
-function reset(env::RunEnv, nodes::Vector{NodeEnv}=setup_nodes(env.masterid))
-    env.nodes = nodes
+function reset(env::RunEnv, nodes::Vector{Int})
+    (hash(nodes) === env.nodehash) || reset(env)
+    nothing
+end
+
+function reset(env::RunEnv, nodes::NodeEnvList=setup_nodes(env.masterid))
+    if isa(nodes, Tuple)
+        env.nodehash, env.nodes = nodes
+    else
+        env.nodes = nodes
+        env.nodehash = hash(procs())
+    end
     nexecutors = 0
-    for node in nodes
+    for node in env.nodes
         nw = length(node.executorids)
         (nw > 1) || error("need at least two workers on each node")
         nexecutors += nw
@@ -49,7 +63,7 @@ function reset(env::RunEnv, nodes::Vector{NodeEnv}=setup_nodes(env.masterid))
     (nexecutors > 1) || error("need at least two workers")
 
     # ensure clean paths
-    delete_meta(UInt64(env.masterid), nodes, env.rootpath)
+    delete_meta(UInt64(env.masterid), env.nodes, env.rootpath)
 
     @everywhere begin
         MemPool.enable_who_has_read[] = false
@@ -177,6 +191,7 @@ end
 
 function setup_nodes(master=1)
     wd = worker_distribution()
+    nodehash = hash(sort(vcat(collect(values(wd))...)))
     frefservers = Dict{IPv4,Vector{Int}}()
 
     if length(wd) == 1
@@ -223,7 +238,7 @@ function setup_nodes(master=1)
         end
     end
 
-    nodes
+    nodehash, nodes
 end
 
 #------------------------------------
@@ -321,25 +336,3 @@ dref_to_fref!(dag) = walk_dag(dag, true) do node,depth
         node
     end
 end
-
-#=
-tolerating node failures and dynamic node additions
-
-- monitor task periodically takes stock of process list
-- if new processes are added
-    - marks RunEnv as stale (should be reconstructed next time)
-- if any processes are removed
-    - marks RunEnv as stale
-    - determines the node to which the process belongs
-    - if it belonged to a valid node
-        - find the broker or in its absence, one of the executors
-        - remove broker from master pinger
-        - if found
-            - send a cleanup message
-            - rmproc all workers on that node
-        - determine tasks the broker was executing and reschedule them
-        - remove node from runenv
-
-
-On next run, recreate nodes if runenv is marked stale.
-=#

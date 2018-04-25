@@ -37,7 +37,8 @@ function init(M::SimpleExecutorMeta, brokerid::Int; add_annotation=identity, del
     M.add_annotation = add_annotation
     M.del_annotation = del_annotation
     M.result_callback = result_callback
-    M.results_channel = brokercall(broker_register_for_results, M)
+    pid = myid()
+    M.results_channel = brokercall(broker_register_for_results, M, pid)
     M.cachingpool = Base.Distributed.CachingPool([brokerid])
     donetasks = brokercall(broker_get_donetasks, M)::Set{TaskIdType}
     union!(M.donetasks, donetasks)
@@ -100,6 +101,8 @@ function delete!(M::SimpleExecutorMeta)
     if myid() === M.brokerid
         empty!(META)
         empty!(TASKS)
+        empty!(PID_RR_MAP)
+        empty!(PID_TASK_MAP)
         deregister(RESULTS)
     end
     nothing
@@ -121,14 +124,30 @@ end
 function cleanup(M::SimpleExecutorMeta)
 end
 
+function detach(M::SimpleExecutorMeta, pid)
+    taskmap = Dict{TaskIdType,TaskIdType}()
+    if (myid() === M.brokerid) && (pid in keys(PID_RR_MAP))
+        rr = PID_RR_MAP[pid]
+        delete!(PID_RR_MAP, pid)
+        deregister(RESULTS, rr)
+        if pid in keys(PID_TASK_MAP)
+            taskmap = PID_TASK_MAP[pid]
+            delete!(PID_TASK_MAP, pid)
+        end
+    end
+    taskmap
+end
+
 @timetrack function share_task(M::SimpleExecutorMeta, id::TaskIdType, allow_dup::Bool)
     annotated_task = M.add_annotation(id)
-    brokercall(broker_share_task, M, id, annotated_task, allow_dup)
+    pid = myid()
+    brokercall(broker_share_task, M, id, annotated_task, allow_dup, pid)
     nothing
 end
 
 @timetrack function steal_task(M::SimpleExecutorMeta, selector=default_task_scheduler)
-    taskid = remotecall_fetch(broker_steal_task, M.cachingpool, selector)::TaskIdType
+    pid = myid()
+    taskid = remotecall_fetch(broker_steal_task, M.cachingpool, selector, pid)::TaskIdType
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 
@@ -137,7 +156,8 @@ end
     M.proclocal[k] = val
     if !processlocal
         serval = meta_ser((val,refcount))
-        brokercall(broker_set_result, M, k, serval)
+        pid = myid()
+        brokercall(broker_set_result, M, k, serval, id, pid)
     end
     push!(M.donetasks, id)
     nothing
@@ -173,7 +193,8 @@ function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, 
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
     serval = meta_ser((val,refcount))
-    brokercall(broker_set_result, M, k, serval)
+    pid = myid()
+    brokercall(broker_set_result, M, k, serval, id, pid)
     nothing
 end
 
@@ -184,7 +205,7 @@ function broker_has_result(k)
     k in keys(META)
 end
 
-function broker_share_task(id::TaskIdType, annotated::TaskIdType, allow_dup::Bool)
+function broker_share_task(id::TaskIdType, annotated::TaskIdType, allow_dup::Bool, pid::Int)
     M = (DagScheduler.genv[].meta)::SimpleExecutorMeta
     s = sharepath(M, id)
     canshare = withtaskmutex() do
@@ -201,11 +222,12 @@ function broker_share_task(id::TaskIdType, annotated::TaskIdType, allow_dup::Boo
         M.sharemode.ncreated += 1
         M.sharemode.nshared += 1
         broker_send_sharestats(M)
+        broker_remove_pending_task(id, pid)
     end
     nothing
 end
 
-function broker_steal_task(selector)
+function broker_steal_task(selector, executorid)
     genv = DagScheduler.genv[]
     (genv === nothing) && (return NoTask)
     M = (genv.meta)::SimpleExecutorMeta
@@ -219,7 +241,10 @@ function broker_steal_task(selector)
         end
         taskid
     end
-    (taskid !== NoTask) && broker_send_sharestats(M)
+    if taskid !== NoTask
+        broker_send_sharestats(M)
+        broker_add_pending_task(M.del_annotation(taskid), taskid, executorid)
+    end
     taskid
 end
 
@@ -232,9 +257,25 @@ function broker_send_sharestats(M)
     nothing
 end
 
-function broker_set_result(k::String, val::String)
+function broker_set_result(k::String, val::String, id, pid)
     META[k] = val
     put!(RESULTS, (k,val))
+    broker_remove_pending_task(id, pid)
+    nothing
+end
+
+# remove task id from pending list of broker id
+broker_remove_pending_task(id, pid) = broker_remove_pending_task(TaskIdType(id), Int(pid))
+function broker_remove_pending_task(id::TaskIdType, pid::Int)
+    (pid in keys(PID_TASK_MAP)) && delete!(PID_TASK_MAP[pid], id)
+    nothing
+end
+
+# add task id as pending from executor
+broker_add_pending_task(id, annotatedid, pid) = broker_add_pending_task(TaskIdType(id), TaskIdType(annotatedid), Int(pid))
+function broker_add_pending_task(id::TaskIdType, annotatedid::TaskIdType, pid::Int)
+    tasks = get!(()->Dict{TaskIdType,TaskIdType}(), PID_TASK_MAP, pid)
+    tasks[id] = annotatedid
     nothing
 end
 
@@ -242,8 +283,10 @@ function broker_get_result(k::String)
     META[k]
 end
 
-function broker_register_for_results()
-    register(RESULTS)
+function broker_register_for_results(pid)
+    rr = register(RESULTS)
+    PID_RR_MAP[pid] = rr
+    rr
 end
 
 function broker_get_donetasks()

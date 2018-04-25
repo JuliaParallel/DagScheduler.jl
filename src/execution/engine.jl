@@ -46,8 +46,75 @@ function print_stats(runenv::RunEnv)
     nothing
 end
 
-function check_failures(runenv::RunEnv, onfailure=(pid,res)->info("PID $pid failed with $res"))
+function handle_failure(runenv::RunEnv, env::ExecutionCtx, pid, cause)
+    meta = env.meta
+    isa(cause, ProcessExitedException) && (cause = :killed)
+    info("PID $pid failed with $cause")
+
+    for node in runenv.nodes
+        executors = node.executorids
+        if (pid == node.brokerid) || (pid in executors)
+            # remove node from runenv
+            filter!((x)->(x!==node), runenv.nodes)
+            tasks_to_reschedule = detach(meta, node.brokerid)
+            info("detached brokerid ", node.brokerid, " with ", length(tasks_to_reschedule), " tasks to reschedule")
+            cleanupnode = ((cause === :killed) && (pid === node.brokerid)) ? first(executors) : node.brokerid
+
+            # identify a cleanup node and terminate the others
+            nodestoterminate = convert(Vector{Int}, copy(executors))
+            push!(nodestoterminate, node.brokerid)
+            (cause === :killed) && filter!((x)->x!=pid, nodestoterminate)
+            filter!((x)->x!=cleanupnode, nodestoterminate)
+            info("terminating nodes ", nodestoterminate)
+            for tpid in nodestoterminate
+                try
+                    rmprocs(tpid)
+                catch ex
+                    warn("error $ex terminating $tpid")
+                end
+            end
+
+            # cleanup and terminate the last (cleanup) node
+            info("cleaning up and terminating last node ", cleanupnode)
+            try
+                remotecall_wait(cleanup_meta, cleanupnode, META_IMPL[:node], runenv.rootpath, node.brokerid)
+                rmprocs(Int(cleanupnode))
+            catch ex
+                warn("error $ex terminating $cleanupnode")
+            end
+            isempty(runenv.nodes) && error("PID $pid failed with $cause")
+
+            # reschedule tasks being executed by the terminated node
+            for (tid,annotatedtid) in tasks_to_reschedule
+                info("rescheduling task $tid annotated as $annotatedtid")
+                enqueue(env, annotatedtid, false, true)
+            end
+            break
+        end
+    end
+
+    nothing
+end
+
+function check_failures(runenv::RunEnv, env::ExecutionCtx)
     nfailures = 0
+
+    # check for process failure
+    procsnow = sort!(procs())
+    if hash(procsnow) !== runenv.nodehash
+        usedprocs = [runenv.masterid]
+        for node in runenv.nodes
+            push!(usedprocs, node.brokerid)
+            append!(usedprocs, node.executorids)
+        end
+        deadprocs = setdiff(usedprocs, procsnow)
+
+        for pid in deadprocs
+            handle_failure(runenv, env, pid, :killed)
+            nfailures += 1
+        end
+    end
+
     @sync for node in runenv.nodes
         @async begin
             tasklist = []
@@ -56,12 +123,17 @@ function check_failures(runenv::RunEnv, onfailure=(pid,res)->info("PID $pid fail
             end
             append!(tasklist, zip(node.executorids, node.executor_tasks))
             for (pid,task) in tasklist
-                if isready(task)
-                    result = fetch(task)
-                    if !isa(result, Tuple)
-                        onfailure(pid, result)
-                        nfailures += 1
+                try
+                    if isready(task)
+                        result = fetch(task)
+                        if !isa(result, Tuple)
+                            handle_failure(runenv, env, pid, result)
+                            nfailures += 1
+                        end
                     end
+                catch ex
+                    handle_failure(runenv, env, pid, ex)
+                    nfailures += 1
                 end
             end
         end
@@ -356,7 +428,7 @@ function runmaster(runenv::RunEnv, root_t::Thunk, execstages, costs::Vector; deb
     remotecall_wait(join_cluster, Int(id))
     started = false
     @schedule while !started && !isready(start_cond)
-        check_failures(runenv)
+        check_failures(runenv, env)
         sleep(0.01)
     end
     take!(start_cond)
@@ -375,7 +447,7 @@ function runmaster(runenv::RunEnv, root_t::Thunk, execstages, costs::Vector; deb
                 master_schedule(env, execstages, scheduled, completed)
             end
             wait_trigger(env.meta)
-            check_failures(runenv)
+            check_failures(runenv, env)
         end
 
         tasklog(env, "stole ", env.nstolen, " shared ", env.nshared, " tasks")
