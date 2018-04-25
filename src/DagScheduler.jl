@@ -6,7 +6,7 @@ using MemPool
 using RemoteMonitor
 
 import Dagger: istask, inputs, Chunk, cleanup
-import Base: delete!, filter!, +, /, isless
+import Base: delete!, filter!, +, /, isless, show
 
 
 export runmaster, runbroker, runexecutor, rundag, RunEnv, NodeEnv, cleanup

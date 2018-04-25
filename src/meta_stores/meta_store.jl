@@ -95,6 +95,7 @@ wait_trigger{T<:ExecutorMeta}(M::T; timeoutsec::Int=5) = error("method not imple
 delete!{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
 reset{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
 cleanup{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
+detach{T<:ExecutorMeta}(M::T, pid) = error("method not implemented for $T")
 share_task{T<:ExecutorMeta}(M::T, id::TaskIdType, allow_dup::Bool) = error("method not implemented for $T")
 steal_task{T<:ExecutorMeta}(M::T, selector=default_task_selector) = error("method not implemented for $T")
 set_result{T<:ExecutorMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
@@ -123,7 +124,7 @@ using SharedDataStructures
 
 import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
-        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector, @timetrack, statetrack, logmsg
 
@@ -142,7 +143,7 @@ using Etcd
 
 import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask,
-        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export, default_task_selector, @timetrack, statetrack, logmsg
 
@@ -159,7 +160,7 @@ using Base.Threads
 
 import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
-        take_share_snapshot, should_share, reset, cleanup, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector, @timetrack, statetrack, logmsg
 
@@ -170,6 +171,8 @@ const Results = BcastChannel{Tuple{String,String}}
 const META = Dict{String,String}()
 const TASKS = Vector{TaskIdType}()
 const RESULTS = Results()
+const PID_RR_MAP = Dict{Int,RemoteChannel}()
+const PID_TASK_MAP = Dict{Int, Dict{TaskIdType,TaskIdType}}()
 const taskmutex = Channel{Bool}(1)
 
 include("simple_meta_store.jl")

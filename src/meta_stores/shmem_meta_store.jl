@@ -55,6 +55,8 @@ sharedcounterpath(path::String) = joinpath(path, "counter")
 shmdictpath(M::ShmemExecutorMeta) = shmdictpath(M.path)
 shmdictpath(path::String) = joinpath(path, "shmdict")
 
+detach(M::ShmemExecutorMeta, pid) = Dict{TaskIdType,TaskIdType}()
+
 function init(M::ShmemExecutorMeta, brokerid::Int; add_annotation=identity, del_annotation=identity, result_callback=nothing)
     M.brokerid = brokerid
     M.add_annotation = add_annotation

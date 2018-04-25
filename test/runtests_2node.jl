@@ -68,5 +68,5 @@ end
     DagScheduler.print_stats(runenv)
 end
 
-cleanup(runenv)
+DagScheduler.cleanup(runenv)
 isdir(".mempool") && rm(".mempool"; recursive=true)

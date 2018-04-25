@@ -22,32 +22,73 @@ mutable struct NodeEnv
     end
 end
 
+# NodeEnv list, optionally accompanied by the nodehash
+const NodeEnvList = Union{Vector{NodeEnv},Tuple{UInt64,Vector{NodeEnv}}}
+
 mutable struct RunEnv
-    rootpath::String
+    rootpath::String                # metadata path to work with
     masterid::UInt64
-    nodes::Vector{NodeEnv}
-    reset_task::Union{Task,Void}
+    nodes::Vector{NodeEnv}          # process tree with designated brokers and executors
+    nodehash::UInt64                # used to detect changes in process tree
+    reset_task::Union{Task,Void}    # async reset task fired after each run
     debug::Bool
     profile::Bool
     remotetrack::Bool
 
-    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::Vector{NodeEnv}=setup_nodes(masterid), debug::Bool=false, profile::Bool=false, remotetrack::Bool=false)
-        nexecutors = 0
-        for node in nodes
-            nw = length(node.executorids)
-            (nw > 1) || error("need at least two workers on each node")
-            nexecutors += nw
-        end
-        (nexecutors > 1) || error("need at least two workers")
-
-        # ensure clean paths
-        delete_meta(UInt64(masterid), nodes, rootpath)
-
-        @everywhere MemPool.enable_who_has_read[] = false
-        @everywhere Dagger.use_shared_array[] = false
-
-        new(rootpath, masterid, nodes, nothing, debug, profile, remotetrack)
+    function RunEnv(; rootpath::String="/D", masterid::Int=myid(), nodes::NodeEnvList=setup_nodes(masterid), debug::Bool=false, profile::Bool=false, remotetrack::Bool=false)
+        env = new(rootpath, masterid, Vector{NodeEnv}(), 0, nothing, debug, profile, remotetrack)
+        reset(env, nodes)
+        env
     end
+end
+
+function reset(env::RunEnv, nodes::Vector{Int})
+    (hash(nodes) === env.nodehash) || reset(env)
+    nothing
+end
+
+function reset(env::RunEnv, nodes::NodeEnvList=setup_nodes(env.masterid))
+    if isa(nodes, Tuple)
+        env.nodehash, env.nodes = nodes
+    else
+        env.nodes = nodes
+        env.nodehash = hash(procs())
+    end
+    nexecutors = 0
+    for node in env.nodes
+        nw = length(node.executorids)
+        (nw > 1) || error("need at least two workers on each node")
+        nexecutors += nw
+    end
+    (nexecutors > 1) || error("need at least two workers")
+
+    # ensure clean paths
+    delete_meta(UInt64(env.masterid), env.nodes, env.rootpath)
+
+    @everywhere begin
+        MemPool.enable_who_has_read[] = false
+        empty!(MemPool.wrkrips)
+        Dagger.use_shared_array[] = false
+    end
+
+    nothing
+end
+
+function show(io::IO, env::RunEnv)
+    attribs = []
+    env.debug && push!(attribs, "debug")
+    env.profile && push!(attribs, "profile")
+    env.remotetrack && push!(attribs, "remotetrack")
+    print(io, "RunEnv", isempty(attribs) ? "" : (" (" * join(attribs, ", ") * ")"))
+    for node in env.nodes
+        print(io, "\n ↳ ", node)
+    end
+    nothing
+end
+
+function show(io::IO, node::NodeEnv)
+    print(io, node.host, " [", node.brokerid, " ⇄ ", join(map(string, node.executorids), ","), "]")
+    nothing
 end
 
 struct ComputeCost
@@ -150,11 +191,15 @@ end
 
 function setup_nodes(master=1)
     wd = worker_distribution()
+    nodehash = hash(sort(vcat(collect(values(wd))...)))
     frefservers = Dict{IPv4,Vector{Int}}()
 
     if length(wd) == 1
         # only one node. make master the broker and use shm meta_store
         @everywhere begin
+            eval(:(using DagScheduler))
+            eval(:(using Dagger))
+            eval(:(using MemPool))
             DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
             DagScheduler.META_IMPL[:cluster] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
         end
@@ -165,6 +210,9 @@ function setup_nodes(master=1)
     else
         # multiple nodes. select one broker on each node (minimum pid on each group is the broker)
         @everywhere begin
+            eval(:(using DagScheduler))
+            eval(:(using Dagger))
+            eval(:(using MemPool))
             DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
             DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
         end
@@ -173,7 +221,8 @@ function setup_nodes(master=1)
             sort!(filter!(w->w!=master, wrkrs))
             if !isempty(wrkrs)
                 brokerid = shift!(wrkrs)
-                push!(nodes, NodeEnv(brokerid, ip, wrkrs))
+                # include a node only if it has at least 2 executors
+                (length(wrkrs) > 1) && push!(nodes, NodeEnv(brokerid, ip, wrkrs))
                 frefservers[ip] = [brokerid]
             else
                 frefservers[ip] = [master]
@@ -189,7 +238,7 @@ function setup_nodes(master=1)
         end
     end
 
-    nodes
+    nodehash, nodes
 end
 
 #------------------------------------
