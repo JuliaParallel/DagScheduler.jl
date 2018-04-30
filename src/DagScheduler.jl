@@ -27,5 +27,6 @@ include("meta_stores/meta_store.jl")
 include("scheduling/scheduler.jl")
 include("execution/queue.jl")
 include("execution/engine.jl")
+include("plugin.jl")
 
 end # module

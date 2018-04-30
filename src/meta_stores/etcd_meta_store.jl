@@ -273,7 +273,11 @@ end
 function set_result(M::EtcdExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
     k = resultpath(M, id)
     M.proclocal[k] = val
-    processlocal || set(M.cli, k, meta_ser((val,refcount)))
+    if !processlocal
+        val = meta_pack(val)
+        serval = meta_ser((val,refcount))
+        set(M.cli, k, serval)
+    end
     push!(M.donetasks, id)
     nothing
 end
@@ -281,13 +285,13 @@ end
 function get_result(M::EtcdExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
     if k in keys(M.proclocal)
-        M.proclocal[k]
+        val = M.proclocal[k]
     else
         resp = get(M.cli, k)
         val, refcount = meta_deser(resp["node"]["value"])
         M.proclocal[k] = val
-        val
     end
+    meta_unpack(val)
 end
 
 function has_result(M::EtcdExecutorMeta, id::TaskIdType)
@@ -337,6 +341,7 @@ function export_local_result(M::EtcdExecutorMeta, id::TaskIdType, executable, re
     exists(M.cli, k) && return
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
+    val = meta_pack(val)
     set(M.cli, k, meta_ser((val,refcount)))
     nothing
 end

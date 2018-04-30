@@ -197,6 +197,7 @@ function set_result(M::ShmemExecutorMeta, id::TaskIdType, val; refcount::UInt64=
     M.proclocal[k] = val
 
     if !processlocal
+        val = meta_pack(val)
         withlock(M.shmdict.lck) do
             M.shmdict[k] = (val,refcount)
         end
@@ -216,14 +217,14 @@ end
 function get_result(M::ShmemExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
     if k in keys(M.proclocal)
-        M.proclocal[k]
+        val = M.proclocal[k]
     else
         sval = withlock(M.shmdict.lck) do
             M.shmdict[k]
         end
         val, refcount = deserialize(IOBuffer(sval))
-        val
     end
+    meta_unpack(val)
 end
 
 function has_result(M::ShmemExecutorMeta, id::TaskIdType)
@@ -256,6 +257,7 @@ function export_local_result(M::ShmemExecutorMeta, id::TaskIdType, executable, r
     (k in keys(M.proclocal)) || return
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
+    val = meta_pack(val)
 
     withlock(M.shmdict.lck) do
         M.shmdict[k] = (val,refcount)

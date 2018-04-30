@@ -302,15 +302,6 @@ function exec(env::ExecutionCtx, task::TaskIdType)
     # export (if other processes need it) or keep in memory (for use in-process) the result
     # TODO: handle vector of chunks specially?
     if was_stolen(env, task)
-        if isa(res, Vector{Chunk})
-            res = chunktodisk(res)
-        end
-        if !isa(res, Chunk)
-            res = Dagger.tochunk(res)
-        end
-        if isa(res, Chunk) && isa(res.handle, DRef)
-            res = chunktodisk(res)
-        end
         set_result(env.meta, task, res; refcount=UInt64(length(env.dependents[t])), processlocal=false)
     else
         set_result(env.meta, task, res)

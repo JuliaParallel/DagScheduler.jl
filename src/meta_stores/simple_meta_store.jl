@@ -155,6 +155,7 @@ end
     k = resultpath(M, id)
     M.proclocal[k] = val
     if !processlocal
+        val = meta_pack(val)
         serval = meta_ser((val,refcount))
         pid = myid()
         brokercall(broker_set_result, M, k, serval, id, pid)
@@ -166,13 +167,13 @@ end
 @timetrack function get_result(M::SimpleExecutorMeta, id::TaskIdType)
     k = resultpath(M, id)
     if k in keys(M.proclocal)
-        M.proclocal[k]
+        val = M.proclocal[k]
     else
         v = brokercall(broker_get_result, M, k)::String
         val, refcount = meta_deser(v)
         M.proclocal[k] = val
-        val
     end
+    meta_unpack(val)
 end
 
 function has_result(M::SimpleExecutorMeta, id::TaskIdType)
@@ -192,6 +193,7 @@ function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, 
     exists && return
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
+    val = meta_pack(val)
     serval = meta_ser((val,refcount))
     pid = myid()
     brokercall(broker_set_result, M, k, serval, id, pid)
