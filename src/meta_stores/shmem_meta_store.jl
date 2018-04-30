@@ -3,8 +3,8 @@
 #const MAP_NUM_ENTRIES = 1024*5     # max number of results to store in shared dict
 const MAP_NUM_ENTRIES = 1024*100  # max number of results to store in shared dict
 const MAP_ENTRY_SZ = 256           # max size of each result stored in shared dict
-const DONE_TASKS_SZ = 1024*100     # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))
-const SHARED_TASKS_SZ = 1024*100   # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyical nodes))
+const DONE_TASKS_SZ = 1024*100     # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyiscal nodes))
+const SHARED_TASKS_SZ = 1024*100   # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyiscal nodes))
 
 mutable struct ShmemExecutorMeta <: ExecutorMeta
     path::String
@@ -31,10 +31,16 @@ mutable struct ShmemExecutorMeta <: ExecutorMeta
         mkpath(sharedtaskspath(path))
         mkpath(allsharedtaskspath(path))
         mkpath(sharedcounterpath(path))
-        shmdict = ShmDict(shmdictpath(path), MAP_NUM_ENTRIES, MAP_ENTRY_SZ; create=true)
-        sharedtasks = SharedCircularDeque{TaskIdType}(sharedtaskspath(path), SHARED_TASKS_SZ; create=false)
-        allsharedtasks = SharedCircularDeque{TaskIdType}(allsharedtaskspath(path), SHARED_TASKS_SZ; create=false)
-        donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(path), DONE_TASKS_SZ; create=false)
+
+        nentries = get(DagScheduler.META_IMPL, :map_num_entries, MAP_NUM_ENTRIES)
+        entry_sz = get(DagScheduler.META_IMPL, :map_entry_sz, MAP_ENTRY_SZ)
+        shared_tasks_sz = get(DagScheduler.META_IMPL, :shared_tasks_sz, SHARED_TASKS_SZ)
+        done_tasks_sz = get(DagScheduler.META_IMPL, :done_tasks_sz, DONE_TASKS_SZ)
+
+        shmdict = ShmDict(shmdictpath(path), nentries, entry_sz; create=true)
+        sharedtasks = SharedCircularDeque{TaskIdType}(sharedtaskspath(path), shared_tasks_sz; create=false)
+        allsharedtasks = SharedCircularDeque{TaskIdType}(allsharedtaskspath(path), shared_tasks_sz; create=false)
+        donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(path), done_tasks_sz; create=false)
         sharedcounter = ResourceCounter(sharedcounterpath(path), 2; create=true)
         trigger = nothing
         new(path, 0, shmdict, Dict{String,Any}(),
@@ -119,9 +125,13 @@ function delete!(M::ShmemExecutorMeta)
     empty!(M.sharedtasks)
     empty!(M.allsharedtasks)
     Semaphores.reset(M.sharedcounter, Cushort[0,0])
-    M.allsharedtasks = SharedCircularDeque{TaskIdType}(allsharedtaskspath(M), SHARED_TASKS_SZ; create=true)
-    M.sharedtasks = SharedCircularDeque{TaskIdType}(sharedtaskspath(M), SHARED_TASKS_SZ; create=true)
-    M.donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(M), DONE_TASKS_SZ; create=true)
+
+    shared_tasks_sz = get(DagScheduler.META_IMPL, :shared_tasks_sz, SHARED_TASKS_SZ)
+    done_tasks_sz = get(DagScheduler.META_IMPL, :done_tasks_sz, DONE_TASKS_SZ)
+
+    M.allsharedtasks = SharedCircularDeque{TaskIdType}(allsharedtaskspath(M), shared_tasks_sz; create=true)
+    M.sharedtasks = SharedCircularDeque{TaskIdType}(sharedtaskspath(M), shared_tasks_sz; create=true)
+    M.donetasks = SharedCircularDeque{TaskIdType}(donetaskspath(M), done_tasks_sz; create=true)
     if myid() === M.brokerid
         deregister(pinger)
         withlock(M.shmdict.lck) do

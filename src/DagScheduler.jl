@@ -12,12 +12,15 @@ import Base: delete!, filter!, +, /, isless, show
 export runmaster, runbroker, runexecutor, rundag, RunEnv, NodeEnv, cleanup
 
 const META_IMPL = Dict(
-    # :node => "DagScheduler.SimpleMeta.SimpleExecutorMeta",
+    # configurable metadata implementations to use
     :node => "DagScheduler.ShmemMeta.ShmemExecutorMeta",
-    # :node => "DagScheduler.EtcdMeta.EtcdExecutorMeta",
     :cluster => "DagScheduler.SimpleMeta.SimpleExecutorMeta",
-    # :cluster => "DagScheduler.ShmemMeta.ShmemExecutorMeta",
-    # :cluster => "DagScheduler.EtcdMeta.EtcdExecutorMeta",
+
+    # configuration of shmem metadata parameters
+    :map_num_entries => 1024*5,         # max number of results to store in shared dict
+    :map_entry_sz => 256,               # max size of each result stored in shared dict
+    :done_tasks_sz => 1024*100,         # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyiscal nodes))
+    :shared_tasks_sz => 1024*100,       # size of shm, limits the max number of nodes in dag (roughly > (total_dag_nodes / nphyiscal nodes))
     :_ => "_"
 )
 
