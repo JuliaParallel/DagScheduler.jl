@@ -5,7 +5,11 @@ using DagScheduler
 using Base.Test
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
-runenv = RunEnv()
+@everywhere begin
+    DagScheduler.META_IMPL[:map_num_entries] = 1024*100
+    DagScheduler.META_IMPL[:map_entry_sz] = 1512
+end
+runenv = DagScheduler.Plugin.setrunenv(RunEnv())
 
 @testset "deep dag" begin
     info("Testing deep dag...")

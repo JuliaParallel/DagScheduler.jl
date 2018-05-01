@@ -1,11 +1,17 @@
 addprocs(5)
 
 include("../../daggen.jl")
-Dagger.use_shared_array[] = true
 using DagScheduler
 using BenchmarkTools
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
+@everywhere begin
+    function resetscheduler()
+        Dagger.PLUGIN_CONFIGS[:scheduler] = "Dagger.Sch"
+    end
+    Dagger.use_shared_array[] = true
+    resetscheduler()
+end
 
 const L = 10^6
 const dag2 = DagScheduler.persist_chunks!(gen_sort_dag(L, 40, 4, 40));

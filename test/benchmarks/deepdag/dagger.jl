@@ -5,6 +5,13 @@ using DagScheduler
 using BenchmarkTools
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
+@everywhere begin
+    function resetscheduler()
+        Dagger.PLUGIN_CONFIGS[:scheduler] = "Dagger.Sch"
+    end
+    Dagger.use_shared_array[] = true
+    resetscheduler()
+end
 
 const L = 6^4
 const dag2 = gen_straight_dag(ones(Int, L));

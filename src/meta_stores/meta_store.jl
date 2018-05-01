@@ -52,6 +52,10 @@ function reset(sm::ShareMode)
     nothing
 end
 
+struct Packed
+    res
+end
+
 meta_deser(v) = meta_deser(string(v))
 meta_deser(v::String) = meta_deser(base64decode(v))
 meta_deser(v::Vector{UInt8}) = deserialize(IOBuffer(v))
@@ -60,6 +64,12 @@ function meta_ser(x)
     serialize(iob, x)
     base64encode(take!(iob))
 end
+
+meta_pack(v::Chunk) = isa(v.handle, DRef) ? chunktodisk(v) : v
+meta_pack(v::Vector{Chunk}) = Packed(chunktodisk(Dagger.tochunk(chunktodisk(v))))
+meta_pack(v) = Packed(chunktodisk(Dagger.tochunk(v)))
+meta_unpack(v) = v
+meta_unpack(v::Packed) = collect(v.res)
 
 function repurpose_result_to_export(t::Thunk, val)
     if !isa(val, Chunk)
@@ -124,7 +134,7 @@ using SharedDataStructures
 
 import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
-        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, meta_unpack, meta_pack, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector, @timetrack, statetrack, logmsg
 
@@ -143,7 +153,7 @@ using Etcd
 
 import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask,
-        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, meta_unpack, meta_pack, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export, default_task_selector, @timetrack, statetrack, logmsg
 
@@ -160,7 +170,7 @@ using Base.Threads
 
 import ..DagScheduler
 import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
-        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, resultroot, resultpath, sharepath, taskpath,
+        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, meta_unpack, meta_pack, resultroot, resultpath, sharepath, taskpath,
         init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
         export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector, @timetrack, statetrack, logmsg
 

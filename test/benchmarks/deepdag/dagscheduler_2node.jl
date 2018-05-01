@@ -8,11 +8,13 @@ isdir(".mempool") && rm(".mempool"; recursive=true)
 @everywhere begin
     DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
     DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
+    DagScheduler.META_IMPL[:map_num_entries] = 1024*5
+    DagScheduler.META_IMPL[:map_entry_sz] = 256
 end
 
 node1 = NodeEnv(2, getipaddr(), [3,4,5])
 node2 = NodeEnv(6, getipaddr(), [7,8,9])
-runenv = RunEnv(; nodes=[node1,node2])
+runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1,node2]))
 
 const L = 6^4
 const dag2 = gen_straight_dag(ones(Int, L));
@@ -21,4 +23,4 @@ result = collect(rundag(runenv, dag2));
 #@time result = rundag(runenv, dag2);
 @btime collect(rundag(runenv, dag2))
 
-cleanup(runenv)
+DagScheduler.cleanup(runenv)

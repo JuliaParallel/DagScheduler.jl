@@ -8,10 +8,12 @@ isdir(".mempool") && rm(".mempool"; recursive=true)
 @everywhere begin
     DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
     DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
+    DagScheduler.META_IMPL[:map_num_entries] = 1024*100
+    DagScheduler.META_IMPL[:map_entry_sz] = 1512
 end
 
 node1 = NodeEnv(2, getipaddr(), [3,4,5,6])
-runenv = RunEnv(; nodes=[node1])
+runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1]))
 
 @testset "deep dag" begin
     info("Testing deep dag...")
