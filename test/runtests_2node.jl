@@ -8,11 +8,13 @@ isdir(".mempool") && rm(".mempool"; recursive=true)
 @everywhere begin
     DagScheduler.META_IMPL[:node] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
     DagScheduler.META_IMPL[:cluster] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
+    DagScheduler.META_IMPL[:map_num_entries] = 1024*100
+    DagScheduler.META_IMPL[:map_entry_sz] = 1512
 end
 
 node1 = NodeEnv(2, getipaddr(), [3,4,5])
 node2 = NodeEnv(6, getipaddr(), [7,8,9])
-runenv = RunEnv(; nodes=[node1,node2])
+runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1,node2]))
 
 @testset "deep dag" begin
     info("Testing deep dag...")
@@ -20,6 +22,7 @@ runenv = RunEnv(; nodes=[node1,node2])
     result = collect(rundag(runenv, dag1))
     info("result = ", result)
     @test result == 1
+    @everywhere MemPool.cleanup()
     DagScheduler.print_stats(runenv)
 
     info("Testing cross connected dag...")
@@ -27,6 +30,7 @@ runenv = RunEnv(; nodes=[node1,node2])
     result = collect(rundag(runenv, dag3))
     info("result = ", result)
     @test result == 84
+    @everywhere MemPool.cleanup()
     DagScheduler.print_stats(runenv)
 end
 
@@ -35,6 +39,7 @@ end
 
     for L in (10^6, 10^7)
         dag2 = gen_sort_dag(L, 40, 4, 1)
+        DagScheduler.dref_to_fref!(dag2)
         result = collect(rundag(runenv, dag2))
         info("result = ", typeof(result), ", length: ", length(result), ", sorted: ", issorted(result))
         @test isa(result, Array{Float64,1})
