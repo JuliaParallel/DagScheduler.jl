@@ -9,7 +9,7 @@ import Dagger: istask, inputs, Chunk, cleanup
 import Base: delete!, filter!, +, /, isless, show
 
 
-export runmaster, runbroker, runexecutor, rundag, RunEnv, NodeEnv, cleanup
+export rundag, RunEnv, NodeEnv, cleanup, reset
 
 const META_IMPL = Dict(
     # configurable metadata implementations to use
