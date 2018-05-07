@@ -25,6 +25,19 @@ DagScheduler attempts to do better on the following goals:
 
 ## QuickStart
 
+These are a the packages that need to be cloned:
+
+```
+julia> Pkg.clone("https://github.com/JuliaComputing/DagScheduler.jl.git")
+
+julia> Pkg.clone("https://github.com/tanmaykm/Semaphores.jl.git")
+
+julia> Pkg.clone("https://github.com/tanmaykm/SharedDataStructures.jl.git")
+
+julia> Pkg.clone("https://github.com/tanmaykm/RemoteMonitor.jl.git")
+
+```
+
 To get started, just add `using DagScheduler` in your project that uses Dagger. It will plug itself in and take over scheduling from Dagger. Just make sure that this is done after all proceses are added, so that it is included on all workers as well.
 
 Example:
