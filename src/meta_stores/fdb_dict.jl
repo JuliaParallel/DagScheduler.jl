@@ -32,12 +32,13 @@ mutable struct FdbResultStore
     watchhandle::Union{Void,FDBFuture}
     versionstamp::Vector{UInt8}
     eventprocessor::Union{Void,Task}
+    callback::Union{Void,Function}
     run::Bool
 
-    function FdbResultStore(db::FDBDatabase, path::String)
+    function FdbResultStore(db::FDBDatabase, path::String; callback=nothing)
         dictpath = convert(Vector{UInt8}, joinpath(path, "r") * "/")
         eventpath = convert(Vector{UInt8}, joinpath(path, "re"))
-        new(db, dictpath, eventpath, Dict{TaskIdType,Tuple}(), nothing, UInt8[], nothing, true)
+        new(db, dictpath, eventpath, Dict{TaskIdType,Tuple}(), nothing, UInt8[], nothing, callback, true)
     end
 end
 new_key(rs::FdbResultStore) = prep_atomic_key!(copy(rs.dictpath), length(rs.dictpath)+1)
@@ -77,21 +78,24 @@ end
 
 function on_event(rs::FdbResultStore)
     # process all updates
-    open(FDBTransaction(rs.db)) do tran
+    kvs, more = open(FDBTransaction(rs.db)) do tran
         startkey,endkey = range(rs)
-        kvs, more = getrange(tran, keysel(FDBKeySel.first_greater_than, startkey), keysel(FDBKeySel.first_greater_than, endkey))
-        if (kvs !== nothing) && !isempty(kvs)
-            for kv in kvs
-                key,_val = kv
-                tid = reinterpret(TaskIdType, _val[1:sizeof(TaskIdType)])[1]
-                result = _val[(sizeof(TaskIdType)+1):end]
-                rs.dict[tid] = result
+        getrange(tran, keysel(FDBKeySel.first_greater_than, startkey), keysel(FDBKeySel.first_greater_than, endkey))
+    end
+    if (kvs !== nothing) && !isempty(kvs)
+        for kv in kvs
+            key,_val = kv
+            tid = reinterpret(TaskIdType, _val[1:sizeof(TaskIdType)])[1]
+            result = _val[(sizeof(TaskIdType)+1):end]
+            rs.dict[tid] = result
+            if rs.callback !== nothing
+                rs.callback(tid, result)
             end
-
-            # remember the last versionstamp processed
-            key,_val = kvs[end]
-            rs.versionstamp = key
         end
+
+        # remember the last versionstamp processed
+        key,_val = kvs[end]
+        rs.versionstamp = key
     end
     nothing
 end

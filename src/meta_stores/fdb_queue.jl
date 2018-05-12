@@ -175,38 +175,39 @@ end
 
 function on_event(ts::FdbTaskStore)
     # process all updates
-    open(FDBTransaction(ts.db)) do tran
+    ncreated, ndeleted, kvs, more = open(FDBTransaction(ts.db)) do tran
         startkey,endkey = range(ts)
         ncreated = atomic_integer(Int, getval(tran, ts.subspaces.ncreated))
         ndeleted = atomic_integer(Int, getval(tran, ts.subspaces.ndeleted))
         kvs, more = getrange(tran, keysel(FDBKeySel.first_greater_than, startkey), keysel(FDBKeySel.first_greater_than, endkey))
-        if (kvs !== nothing) && !isempty(kvs)
-            for kv in kvs
-                key,_val = kv
-                val = reinterpret(TaskIdType, _val)
-                tid = val[1]
-                annotated_tid = val[2]
-                reservation = val[3]
+        ncreated, ndeleted, kvs, more
+    end
+    if (kvs !== nothing) && !isempty(kvs)
+        for kv in kvs
+            key,_val = kv
+            val = reinterpret(TaskIdType, _val)
+            tid = val[1]
+            annotated_tid = val[2]
+            reservation = val[3]
 
-                if reservation > 0
-                    pos = findfirst(ts.taskids, tid)
-                    (pos > 0) && splice!(ts.taskids, pos)
-                else
-                    push!(ts.taskids, tid)
-                end
-                ts.taskprops[tid] = (key, annotated_tid, reservation)
+            if reservation > 0
+                pos = findfirst(ts.taskids, tid)
+                (pos > 0) && splice!(ts.taskids, pos)
+            else
+                push!(ts.taskids, tid)
             end
-
-            # remember the last versionstamp processed
-            key,_val = kvs[end]
-            ts.versionstamp = key
+            ts.taskprops[tid] = (key, annotated_tid, reservation)
         end
 
-        # update counts
-        ts.sharemode.ncreated = ncreated
-        ts.sharemode.ndeleted = ndeleted
-        ts.sharemode.nshared = ncreated - ndeleted
+        # remember the last versionstamp processed
+        key,_val = kvs[end]
+        ts.versionstamp = key
     end
+
+    # update counts
+    ts.sharemode.ncreated = ncreated
+    ts.sharemode.ndeleted = ndeleted
+    ts.sharemode.nshared = ncreated - ndeleted
     nothing
 end
 
