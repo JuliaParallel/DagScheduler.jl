@@ -202,3 +202,22 @@ function withtaskmutex(f)
 end
 
 end # module SimpleMeta
+
+# FdbMeta - uses foundationdb
+module FdbMeta
+
+using FoundationDB
+
+import ..DagScheduler
+import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
+        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, meta_unpack, meta_pack, resultroot, resultpath, sharepath, taskpath,
+        init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector, @timetrack, statetrack, logmsg
+
+export FdbExecutorMeta
+
+include("fdb_queue.jl")
+include("fdb_dict.jl")
+#include("fdb_meta_store.jl")
+
+end # module FdbMeta
