@@ -43,6 +43,8 @@ mutable struct FdbResultStore
 end
 new_key(rs::FdbResultStore) = prep_atomic_key!(copy(rs.dictpath), length(rs.dictpath)+1)
 
+set_callback(rs::FdbResultStore, callback) = (rs.callback = callback)
+
 function clear(rs::FdbResultStore)
     start_key = vcat(rs.dictpath, zeros(UInt8, 10))
     end_key = vcat(rs.dictpath, ones(UInt8, 10) * 0xff)

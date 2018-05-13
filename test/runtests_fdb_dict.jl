@@ -3,6 +3,9 @@ using FoundationDB
 using Base.Test
 
 start_client()
+atexit() do
+    stop_client()
+end
 yield()
 
 @testset "fdb dict" begin
@@ -36,5 +39,3 @@ yield()
         end
     end
 end # testset fdb queue
-
-stop_client()

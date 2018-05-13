@@ -3,6 +3,9 @@ using FoundationDB
 using Base.Test
 
 start_client()
+atexit() do
+    stop_client()
+end
 yield()
 
 const waits = Float64[]
@@ -20,8 +23,10 @@ end
 @testset "fdb queue" begin
     open(FDBCluster()) do cluster
         open(FDBDatabase(cluster)) do db
+            ncallbacks = 0
             sharemode = DagScheduler.ShareMode(1)
             ts = DagScheduler.FdbMeta.FdbTaskStore(db, "A", sharemode)
+            DagScheduler.FdbMeta.set_callback(ts, (x)->(ncallbacks += 1))
 
             DagScheduler.FdbMeta.clear(ts)
             DagScheduler.FdbMeta.init(ts)
@@ -126,9 +131,9 @@ end
 
             DagScheduler.FdbMeta.stop_processing_events(ts)
             @test ts.eventprocessor == nothing
+
+            @test ncallbacks > 0
         end
     end
     println("avg wait trigger time: $(mean(waits))")
 end # testset fdb queue
-
-stop_client()

@@ -62,12 +62,14 @@ mutable struct FdbTaskStore
     watchhandle::Union{Void,FDBFuture}
     versionstamp::Vector{UInt8}
     eventprocessor::Union{Void,Task}
+    callback::Union{Void,Function}
     run::Bool
 
-    function FdbTaskStore(db::FDBDatabase, path::String, sharemode::ShareMode)
-        new(db, SubSpaces(path), sharemode, Vector{TaskIdType}(), Dict{TaskIdType,Tuple}(), nothing, UInt8[], nothing, true)
+    function FdbTaskStore(db::FDBDatabase, path::String, sharemode::ShareMode; callback=nothing)
+        new(db, SubSpaces(path), sharemode, Vector{TaskIdType}(), Dict{TaskIdType,Tuple}(), nothing, UInt8[], nothing, callback, true)
     end
 end
+set_callback(ts::FdbTaskStore, callback) = (ts.callback = callback)
 
 function clear(ts::FdbTaskStore)
     start_key = vcat(ts.subspaces.queue, zeros(UInt8, 10))
@@ -216,6 +218,7 @@ function on_event(ts::FdbTaskStore)
     ts.sharemode.ncreated = ncreated
     ts.sharemode.ndeleted = ndeleted
     ts.sharemode.nshared = ncreated - ndeleted
+    (ts.callback === nothing) || ts.callback(kvs)
     nothing
 end
 
