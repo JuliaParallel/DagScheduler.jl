@@ -91,6 +91,13 @@ function init(ts::FdbTaskStore)
     nothing
 end
 
+function new_task(ts::FdbTaskStore, tids::Vector{TaskIdType}, annotated_tids::Vector{TaskIdType})
+    for (tid,annotated_tid) in zip(tids, annotated_tids)
+        new_task(ts, tid, annotated_tid)
+    end
+    nothing
+end
+
 function new_task(ts::FdbTaskStore, tid::TaskIdType, annotated_tid::TaskIdType)
     open(FDBTransaction(ts.db)) do tran
         val = reinterpret(UInt8, TaskIdType[tid, annotated_tid, 0])
@@ -174,6 +181,7 @@ function range(ts::FdbTaskStore)
 end
 
 function on_event(ts::FdbTaskStore)
+    sleep(0.2)
     # process all updates
     ncreated, ndeleted, kvs, more = open(FDBTransaction(ts.db)) do tran
         startkey,endkey = range(ts)
