@@ -50,6 +50,12 @@ end
             @test sharemode.ndeleted == 0
             @test sharemode.nshared == 1
 
+            oldkey = key
+            DagScheduler.FdbMeta.new_task(ts, test_tids[1], test_annotated_tids[1])
+            sleep(0.3)
+            key, tid_annotated, reservation = ts.taskprops[test_tids[1]]
+            @test key == oldkey
+
             DagScheduler.FdbMeta.reserve_task(ts, test_tids[1], 3)
             @until length(ts.taskids) == 0
             @test length(ts.taskids) == 0
@@ -60,6 +66,12 @@ end
             @test sharemode.ncreated == 1
             @test sharemode.ndeleted == 1
             @test sharemode.nshared == 0
+
+            oldkey = key
+            DagScheduler.FdbMeta.new_task(ts, test_tids[1], test_annotated_tids[1])
+            sleep(0.3)
+            key, tid_annotated, reservation = ts.taskprops[test_tids[1]]
+            @test key == oldkey
 
             DagScheduler.FdbMeta.new_task(ts, test_tids[2], test_annotated_tids[2])
             @until length(ts.taskids) == 1
@@ -119,14 +131,25 @@ end
             @test sharemode.ncreated == 6
             @test sharemode.ndeleted == 6
             @test sharemode.nshared == 0
+
+            DagScheduler.FdbMeta.new_task(ts, test_tids[3:end], test_annotated_tids[3:end]; allow_duplicate=true)
+            @until length(ts.taskids) == 3
+            @test length(ts.taskprops) == 5
+            @test sharemode.ncreated == 9
+
+            DagScheduler.FdbMeta.reserve_task(ts, test_tids[3], 4)
+            DagScheduler.FdbMeta.reserve_task(ts, test_tids[4], 4)
+            DagScheduler.FdbMeta.reserve_task(ts, test_tids[5], 4)
+            @until length(ts.taskids) == 0
+
             DagScheduler.FdbMeta.finish_task(ts, test_tids[3])
             DagScheduler.FdbMeta.finish_task(ts, test_tids[4])
             DagScheduler.FdbMeta.finish_task(ts, test_tids[5])
             DagScheduler.FdbMeta.prune_finished_tasks(ts)
             @test isempty(ts.taskids)
             @test isempty(ts.taskprops)
-            @test sharemode.ncreated == 6
-            @test sharemode.ndeleted == 6
+            @test sharemode.ncreated == 9
+            @test sharemode.ndeleted == 9
             @test sharemode.nshared == 0
 
             DagScheduler.FdbMeta.stop_processing_events(ts)

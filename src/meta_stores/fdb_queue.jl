@@ -39,16 +39,18 @@
 struct SubSpaces
     path::String
     queue::Vector{UInt8}
+    uniq::Vector{UInt8}
     event::Vector{UInt8}
     ncreated::Vector{UInt8}
     ndeleted::Vector{UInt8}
 
     function SubSpaces(path::String)
         queue = convert(Vector{UInt8}, joinpath(path, "q") * "/")
+        uniq = convert(Vector{UInt8}, joinpath(path, "u") * "/")
         event = convert(Vector{UInt8}, joinpath(path, "qe"))
         ncreated = convert(Vector{UInt8}, joinpath(path, "qnc"))
         ndeleted = convert(Vector{UInt8}, joinpath(path, "qnd"))
-        new(path, queue, event, ncreated, ndeleted)
+        new(path, queue, uniq, event, ncreated, ndeleted)
     end
 end
 new_key(sp::SubSpaces) = prep_atomic_key!(copy(sp.queue), length(sp.queue)+1)
@@ -72,10 +74,15 @@ end
 set_callback(ts::FdbTaskStore, callback) = (ts.callback = callback)
 
 function clear(ts::FdbTaskStore)
-    start_key = vcat(ts.subspaces.queue, zeros(UInt8, 10))
-    end_key = vcat(ts.subspaces.queue, ones(UInt8, 10) * 0xff)
+    start_keys = [vcat(ts.subspaces.queue, zeros(UInt8, 10)), vcat(ts.subspaces.uniq, zeros(UInt8, 8))]
+    end_keys = [vcat(ts.subspaces.queue, ones(UInt8, 10) * 0xff), vcat(ts.subspaces.uniq, ones(UInt8, 8) * 0xff)]
+   end_key = vcat(ts.subspaces.queue, ones(UInt8, 10) * 0xff)
+
     open(FDBTransaction(ts.db)) do tran
-        clearkeyrange(tran, start_key, end_key)
+        for (start_key, end_key) in zip(start_keys, end_keys)
+            clearkeyrange(tran, start_key, end_key)
+        end
+
         clearkey(tran, ts.subspaces.event)
         clearkey(tran, ts.subspaces.ncreated)
         clearkey(tran, ts.subspaces.ndeleted)
@@ -84,7 +91,6 @@ function clear(ts::FdbTaskStore)
 end
 
 function init(ts::FdbTaskStore)
-    clear(ts)
     open(FDBTransaction(ts.db)) do tran
         atomic_add(tran, ts.subspaces.event, 0)
         atomic_add(tran, ts.subspaces.ncreated, 0)
@@ -93,19 +99,31 @@ function init(ts::FdbTaskStore)
     nothing
 end
 
-function new_task(ts::FdbTaskStore, tids::Vector{TaskIdType}, annotated_tids::Vector{TaskIdType})
+function new_task(ts::FdbTaskStore, tids::Vector{TaskIdType}, annotated_tids::Vector{TaskIdType}; allow_duplicate::Bool=false)
     for (tid,annotated_tid) in zip(tids, annotated_tids)
-        new_task(ts, tid, annotated_tid)
+        new_task(ts, tid, annotated_tid; allow_duplicate=allow_duplicate)
     end
     nothing
 end
 
-function new_task(ts::FdbTaskStore, tid::TaskIdType, annotated_tid::TaskIdType)
+function new_task(ts::FdbTaskStore, tid::TaskIdType, annotated_tid::TaskIdType; allow_duplicate::Bool=false)
     open(FDBTransaction(ts.db)) do tran
-        val = reinterpret(UInt8, TaskIdType[tid, annotated_tid, 0])
-        atomic_setval(tran, new_key(ts.subspaces), val, FDBMutationType.SET_VERSIONSTAMPED_KEY)
-        atomic_add(tran, ts.subspaces.ncreated, 1)
-        atomic_add(tran, ts.subspaces.event, 1)
+        uniqkey = vcat(ts.subspaces.uniq, reinterpret(UInt8, TaskIdType[tid]))
+        # mark task as created, if no duplicates allowed ensure task was not created before
+        if allow_duplicate || (getval(tran, uniqkey) === nothing)
+            if !allow_duplicate
+                # setup conflict and create task
+                endkey = vcat(uniqkey, UInt8[0xff])
+                conflict(tran, uniqkey, endkey, FDBConflictRangeType.READ)
+                conflict(tran, uniqkey, endkey, FDBConflictRangeType.WRITE)
+            end
+            setval(tran, uniqkey, UInt8[0])
+
+            val = reinterpret(UInt8, TaskIdType[tid, annotated_tid, 0])
+            atomic_setval(tran, new_key(ts.subspaces), val, FDBMutationType.SET_VERSIONSTAMPED_KEY)
+            atomic_add(tran, ts.subspaces.ncreated, 1)
+            atomic_add(tran, ts.subspaces.event, 1)
+        end
     end
     nothing
 end
@@ -258,10 +276,14 @@ end
 
 function stop_processing_events(ts::FdbTaskStore)
     ts.run = false
-    open(FDBTransaction(ts.db)) do tran
-        atomic_add(tran, ts.subspaces.event, 1)
+    if ts.eventprocessor !== nothing
+        if !istaskdone(ts.eventprocessor)
+            open(FDBTransaction(ts.db)) do tran
+                atomic_add(tran, ts.subspaces.event, 1)
+            end
+            wait(ts.eventprocessor)
+        end
+        ts.eventprocessor = nothing
     end
-    wait(ts.eventprocessor)
-    ts.eventprocessor = nothing
     nothing
 end

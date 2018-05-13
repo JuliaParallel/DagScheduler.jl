@@ -56,7 +56,6 @@ function clear(rs::FdbResultStore)
 end
 
 function init(rs::FdbResultStore)
-    clear(rs)
     open(FDBTransaction(rs.db)) do tran
         atomic_add(tran, rs.eventpath, 0)
     end
@@ -138,10 +137,14 @@ end
 
 function stop_processing_events(rs::FdbResultStore)
     rs.run = false
-    open(FDBTransaction(rs.db)) do tran
-        atomic_add(tran, rs.eventpath, 1)
+    if rs.eventprocessor !== nothing
+        if !istaskdone(rs.eventprocessor)
+            open(FDBTransaction(rs.db)) do tran
+                atomic_add(tran, rs.eventpath, 1)
+            end
+            wait(rs.eventprocessor)
+        end
+        rs.eventprocessor = nothing
     end
-    wait(rs.eventprocessor)
-    rs.eventprocessor = nothing
     nothing
 end
