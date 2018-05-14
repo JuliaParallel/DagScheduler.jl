@@ -271,7 +271,7 @@ get_frefs(dag) = map(chunktodisk, get_drefs(dag))
 =#
 
 chunktodisk(chunks::Vector{Chunk}) = map(chunktodisk, chunks)
-chunktodisk(chunk::Chunk) = isa(chunk.handle, DRef) ? Chunk(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), chunk.persist) : chunk
+chunktodisk(chunk::Chunk) = isa(chunk.handle, DRef) ? Chunk{Any,FileRef}(chunk.chunktype, chunk.domain, movetodisk(chunk.handle), chunk.persist) : chunk
 
 function walk_dag(fn, dag_node, update::Bool, stop_nodes=TaskIdType[], depth::Int=1)
     if isa(dag_node, Thunk) && !(taskid(dag_node) in stop_nodes)
