@@ -76,7 +76,6 @@ set_callback(ts::FdbTaskStore, callback) = (ts.callback = callback)
 function clear(ts::FdbTaskStore)
     start_keys = [vcat(ts.subspaces.queue, zeros(UInt8, 10)), vcat(ts.subspaces.uniq, zeros(UInt8, 8))]
     end_keys = [vcat(ts.subspaces.queue, ones(UInt8, 10) * 0xff), vcat(ts.subspaces.uniq, ones(UInt8, 8) * 0xff)]
-   end_key = vcat(ts.subspaces.queue, ones(UInt8, 10) * 0xff)
 
     open(FDBTransaction(ts.db)) do tran
         for (start_key, end_key) in zip(start_keys, end_keys)
@@ -200,43 +199,61 @@ function range(ts::FdbTaskStore)
     r1, r2
 end
 
-function on_event(ts::FdbTaskStore)
-    sleep(0.2)
-    # process all updates
-    ncreated, ndeleted, kvs, more = open(FDBTransaction(ts.db)) do tran
-        startkey,endkey = range(ts)
-        ncreated = atomic_integer(Int, getval(tran, ts.subspaces.ncreated))
-        ndeleted = atomic_integer(Int, getval(tran, ts.subspaces.ndeleted))
-        kvs, more = getrange(tran, keysel(FDBKeySel.first_greater_than, startkey), keysel(FDBKeySel.first_greater_than, endkey))
-        ncreated, ndeleted, kvs, more
-    end
-    if (kvs !== nothing) && !isempty(kvs)
-        for kv in kvs
-            key,_val = kv
-            val = reinterpret(TaskIdType, _val)
-            tid = val[1]
-            annotated_tid = val[2]
-            reservation = val[3]
-
-            if reservation > 0
-                pos = findfirst(ts.taskids, tid)
-                (pos > 0) && splice!(ts.taskids, pos)
-            else
-                push!(ts.taskids, tid)
+function read_events(ts, maxretries::Int=5)
+    while maxretries > 0
+        maxretries -= 1
+        try
+            return open(FDBTransaction(ts.db)) do tran
+                startkey,endkey = range(ts)
+                ncreated = atomic_integer(Int, getval(tran, ts.subspaces.ncreated))
+                ndeleted = atomic_integer(Int, getval(tran, ts.subspaces.ndeleted))
+                kvs, more = getrange(tran, keysel(FDBKeySel.first_greater_than, startkey), keysel(FDBKeySel.first_greater_than, endkey); limit=500)
+                ncreated, ndeleted, kvs, more
             end
-            ts.taskprops[tid] = (key, annotated_tid, reservation)
+        catch ex
+            ((maxretries > 0) && isa(ex, FDBError) && (ex.code == 1007)) || rethrow(ex)
+        end
+    end
+end
+
+function on_event(ts::FdbTaskStore)
+    more = true
+
+    while more
+        # process all updates
+        ncreated, ndeleted, kvs, more = read_events(ts)
+
+        if (kvs !== nothing) && !isempty(kvs)
+            for kv in kvs
+                key,_val = kv
+                val = reinterpret(TaskIdType, _val)
+                tid = val[1]
+                annotated_tid = val[2]
+                reservation = val[3]
+
+                if reservation > 0
+                    pos = findfirst(ts.taskids, tid)
+                    (pos > 0) && splice!(ts.taskids, pos)
+                else
+                    push!(ts.taskids, tid)
+                end
+                ts.taskprops[tid] = (key, annotated_tid, reservation)
+            end
+
+            # remember the last versionstamp processed
+            key,_val = kvs[end]
+            ts.versionstamp = key
         end
 
-        # remember the last versionstamp processed
-        key,_val = kvs[end]
-        ts.versionstamp = key
+        if !more
+            # update counts
+            ts.sharemode.ncreated = ncreated
+            ts.sharemode.ndeleted = ndeleted
+            ts.sharemode.nshared = ncreated - ndeleted
+            (ts.callback === nothing) || ts.callback(kvs)
+        end
     end
 
-    # update counts
-    ts.sharemode.ncreated = ncreated
-    ts.sharemode.ndeleted = ndeleted
-    ts.sharemode.nshared = ncreated - ndeleted
-    (ts.callback === nothing) || ts.callback(kvs)
     nothing
 end
 
@@ -261,7 +278,7 @@ function process_events(ts::FdbTaskStore)
         try 
             wait(watchtask)
         catch ex
-            (isa(ex, FDBError) && (ex.code == 1101)) || rethrow(ex)
+            (isa(ex, FDBError) && (ex.code in [1101, 1102, 1007, 1009])) || rethrow(ex)
         end
     end
     nothing
@@ -269,6 +286,7 @@ end
 
 function start_processing_events(ts::FdbTaskStore)
     if ts.eventprocessor === nothing
+        ts.run = true
         ts.eventprocessor = @schedule process_events(ts)
     end
     nothing

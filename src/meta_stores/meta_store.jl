@@ -56,7 +56,7 @@ struct Packed
     res
 end
 
-meta_deser(v) = meta_deser(string(v))
+meta_deser(v) = meta_deser(String(v))
 meta_deser(v::String) = meta_deser(base64decode(v))
 meta_deser(v::Vector{UInt8}) = deserialize(IOBuffer(v))
 function meta_ser(x)
@@ -218,6 +218,23 @@ export FdbExecutorMeta
 
 include("fdb_queue.jl")
 include("fdb_dict.jl")
-#include("fdb_meta_store.jl")
+include("fdb_meta_store.jl")
+
+const fdb_cluster = Ref{Union{Void,FDBCluster}}(nothing)
+const fdb_db = Ref{Union{Void,FDBDatabase}}(nothing)
+
+function __init__()
+    start_client()
+
+    fdb_cluster[] = open(FDBCluster())
+    fdb_db[] = open(FDBDatabase(fdb_cluster[]))
+
+    atexit() do
+        close(fdb_db[])
+        close(fdb_cluster[])
+        stop_client()
+    end
+    nothing
+end
 
 end # module FdbMeta

@@ -77,26 +77,41 @@ function range(rs::FdbResultStore)
     r1, r2
 end
 
-function on_event(rs::FdbResultStore)
-    # process all updates
-    kvs, more = open(FDBTransaction(rs.db)) do tran
-        startkey,endkey = range(rs)
-        getrange(tran, keysel(FDBKeySel.first_greater_than, startkey), keysel(FDBKeySel.first_greater_than, endkey))
-    end
-    if (kvs !== nothing) && !isempty(kvs)
-        for kv in kvs
-            key,_val = kv
-            tid = reinterpret(TaskIdType, _val[1:sizeof(TaskIdType)])[1]
-            result = _val[(sizeof(TaskIdType)+1):end]
-            rs.dict[tid] = result
-            if rs.callback !== nothing
-                rs.callback(tid, result)
+function read_updates(rs::FdbResultStore, maxretries::Int=5)
+    while maxretries > 0
+        maxretries -= 1
+        try
+            return open(FDBTransaction(rs.db)) do tran
+                startkey,endkey = range(rs)
+                getrange(tran, keysel(FDBKeySel.first_greater_than, startkey), keysel(FDBKeySel.first_greater_than, endkey); limit=500)
             end
+        catch ex
+            ((maxretries > 0) && isa(ex, FDBError) && (ex.code == 1007)) || rethrow(ex)
         end
+    end
+end
 
-        # remember the last versionstamp processed
-        key,_val = kvs[end]
-        rs.versionstamp = key
+function on_event(rs::FdbResultStore)
+    more = true
+
+    while more
+        # process all updates
+        kvs, more = read_updates(rs)
+        if (kvs !== nothing) && !isempty(kvs)
+            for kv in kvs
+                key,_val = kv
+                tid = reinterpret(TaskIdType, _val[1:sizeof(TaskIdType)])[1]
+                result = _val[(sizeof(TaskIdType)+1):end]
+                rs.dict[tid] = result
+                if rs.callback !== nothing
+                    rs.callback(tid, result)
+                end
+            end
+
+            # remember the last versionstamp processed
+            key,_val = kvs[end]
+            rs.versionstamp = key
+        end
     end
     nothing
 end
@@ -129,6 +144,7 @@ function process_events(rs::FdbResultStore)
 end
 
 function start_processing_events(rs::FdbResultStore)
+    rs.run = true
     if rs.eventprocessor === nothing
         rs.eventprocessor = @schedule process_events(rs)
     end
