@@ -12,7 +12,7 @@ mutable struct SimpleExecutorMeta <: ExecutorMeta
     proclocal::Dict{String,Any}
     donetasks::Set{TaskIdType}
     sharemode::ShareMode
-    results_channel::Union{Void,RemoteChannel{Channel{Tuple{String,String}}}}
+    results_channel::Union{Void,RemoteChannel{Channel{Tuple{String,Vector{UInt8}}}}}
     add_annotation::Function
     del_annotation::Function
     result_callback::Union{Function,Void}
@@ -45,7 +45,7 @@ function init(M::SimpleExecutorMeta, brokerid::Int; add_annotation=identity, del
     nothing
 end
 
-function process_trigger(M::SimpleExecutorMeta, k::String, v::String)
+function process_trigger(M::SimpleExecutorMeta, k::String, v::Vector{UInt8})
     if k == TIMEOUT_KEY
         # ignore
     elseif k == SHAREMODE_KEY
@@ -83,7 +83,7 @@ function wait_trigger(M::SimpleExecutorMeta; timeoutsec::Int=5)
     if !isready(trigger)
         @schedule begin
             sleep(timeoutsec)
-            fire && !isready(trigger) && put!(trigger, (TIMEOUT_KEY,""))
+            fire && !isready(trigger) && put!(trigger, (TIMEOUT_KEY,Vector{UInt8}()))
         end
     end
 
@@ -169,7 +169,7 @@ end
     if k in keys(M.proclocal)
         val = M.proclocal[k]
     else
-        v = brokercall(broker_get_result, M, k)::String
+        v = brokercall(broker_get_result, M, k)::Vector{UInt8}
         val, refcount = meta_deser(v)
         M.proclocal[k] = val
     end
@@ -259,7 +259,7 @@ function broker_send_sharestats(M)
     nothing
 end
 
-function broker_set_result(k::String, val::String, id, pid)
+function broker_set_result(k::String, val::Vector{UInt8}, id, pid)
     META[k] = val
     put!(RESULTS, (k,val))
     broker_remove_pending_task(id, pid)

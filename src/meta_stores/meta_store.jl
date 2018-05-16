@@ -56,13 +56,14 @@ struct Packed
     res
 end
 
-meta_deser(v) = meta_deser(string(v))
-meta_deser(v::String) = meta_deser(base64decode(v))
+#meta_deser(v) = meta_deser(String(v))
+#meta_deser(v::String) = meta_deser(base64decode(v))
 meta_deser(v::Vector{UInt8}) = deserialize(IOBuffer(v))
 function meta_ser(x)
     iob = IOBuffer()
     serialize(iob, x)
-    base64encode(take!(iob))
+    #base64encode(take!(iob))
+    take!(iob)
 end
 
 meta_pack(v::Chunk) = isa(v.handle, DRef) ? chunktodisk(v) : v
@@ -146,23 +147,6 @@ include("shmem_meta_store.jl")
 
 end # module ShmemMeta
 
-# EtcdMeta - uses Etcd as centralized metadata store
-module EtcdMeta
-
-using Etcd
-
-import ..DagScheduler
-import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask,
-        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, meta_unpack, meta_pack, resultroot, resultpath, sharepath, taskpath,
-        init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
-        export_local_result, repurpose_result_to_export, default_task_selector, @timetrack, statetrack, logmsg
-
-export EtcdExecutorMeta
-
-include("etcd_meta_store.jl")
-
-end # module EtcdMeta
-
 # SimpleMeta - uses Julia messaging and remotecalls
 module SimpleMeta
 
@@ -176,7 +160,7 @@ import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel
 
 export SimpleExecutorMeta
 
-const Results = BcastChannel{Tuple{String,String}}
+const Results = BcastChannel{Tuple{String,Vector{UInt8}}}
 
 const META = Dict{String,String}()
 const TASKS = Vector{TaskIdType}()
@@ -202,3 +186,39 @@ function withtaskmutex(f)
 end
 
 end # module SimpleMeta
+
+# FdbMeta - uses foundationdb
+module FdbMeta
+
+using FoundationDB
+
+import ..DagScheduler
+import ..DagScheduler: TaskIdType, ExecutorMeta, ShareMode, NoTask, BcastChannel,
+        take_share_snapshot, should_share, reset, cleanup, detach, meta_deser, meta_ser, meta_unpack, meta_pack, resultroot, resultpath, sharepath, taskpath,
+        init, delete!, wait_trigger, share_task, steal_task, set_result, get_result, has_result, decr_result_ref,
+        export_local_result, repurpose_result_to_export, register, deregister, put!, brokercall, default_task_selector, @timetrack, statetrack, logmsg
+
+export FdbExecutorMeta
+
+include("fdb_queue.jl")
+include("fdb_dict.jl")
+include("fdb_meta_store.jl")
+
+const fdb_cluster = Ref{Union{Void,FDBCluster}}(nothing)
+const fdb_db = Ref{Union{Void,FDBDatabase}}(nothing)
+
+function __init__()
+    start_client()
+
+    fdb_cluster[] = open(FDBCluster())
+    fdb_db[] = open(FDBDatabase(fdb_cluster[]))
+
+    atexit() do
+        close(fdb_db[])
+        close(fdb_cluster[])
+        stop_client()
+    end
+    nothing
+end
+
+end # module FdbMeta

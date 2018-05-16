@@ -13,6 +13,10 @@ function run_test(script)
     nothing
 end
 
+ENV["NODE_META_IMPL"] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+ENV["CLUSTER_META_IMPL"] = "DagScheduler.SimpleMeta.SimpleExecutorMeta"
+println("Running with ShmemMeta and SimpleMeta")
+println("===================================")
 run(`ipcs -a`)
 println("===================================")
 run_test("runtests_master_only.jl")
@@ -20,3 +24,22 @@ run_test("runtests_1node.jl")
 run_test("runtests_2node.jl")
 println("===================================")
 run(`ipcs -a`)
+
+ENV["NODE_META_IMPL"] = "DagScheduler.ShmemMeta.ShmemExecutorMeta"
+ENV["CLUSTER_META_IMPL"] = "DagScheduler.FdbMeta.FdbExecutorMeta"
+println("Running with ShmemMeta and FdbMeta")
+println("===================================")
+run(`ipcs -a`)
+println("===================================")
+run_test("runtests_1node.jl")
+run_test("runtests_2node.jl")
+println("===================================")
+run(`ipcs -a`)
+
+ENV["NODE_META_IMPL"] = "DagScheduler.FdbMeta.FdbExecutorMeta"
+ENV["CLUSTER_META_IMPL"] = "DagScheduler.FdbMeta.FdbExecutorMeta"
+println("Running with FdbMeta")
+println("===================================")
+run_test("runtests_fdb_queue.jl")
+run_test("runtests_fdb_dict.jl")
+run_test("runtests_master_only.jl")
