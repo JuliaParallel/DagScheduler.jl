@@ -12,7 +12,10 @@ import Base: delete!, filter!, +, /, isless, show
 export rundag, RunEnv, NodeEnv, cleanup, reset
 
 const META_IMPL = Dict(
-    # configurable metadata implementations to use
+    # configurable metadata implementations to use. choose from:
+    # - DagScheduler.ShmemMeta.ShmemExecutorMeta (suitable at node level only)
+    # - DagScheduler.SimpleMeta.SimpleExecutorMeta (suitable at cluster level only)
+    # - DagScheduler.FdbMeta.FdbExecutorMeta (suitable for both node and cluster level)
     :node => "DagScheduler.ShmemMeta.ShmemExecutorMeta",
     :cluster => "DagScheduler.SimpleMeta.SimpleExecutorMeta",
 

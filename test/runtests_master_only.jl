@@ -6,10 +6,13 @@ using Base.Test
 
 isdir(".mempool") && rm(".mempool"; recursive=true)
 @everywhere begin
+    DagScheduler.META_IMPL[:node] = ENV["NODE_META_IMPL"]
+    DagScheduler.META_IMPL[:cluster] = ENV["NODE_META_IMPL"]
     DagScheduler.META_IMPL[:map_num_entries] = 1024*100
     DagScheduler.META_IMPL[:map_entry_sz] = 1512
 end
-runenv = DagScheduler.Plugin.setrunenv(RunEnv())
+node1 = NodeEnv(1, getipaddr(), [2,3,4,5,6])
+runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1]))
 
 @testset "deep dag" begin
     info("Testing deep dag...")
