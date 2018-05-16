@@ -34,7 +34,7 @@ mutable struct FdbExecutorMeta <: ExecutorMeta
         end
         result_trigger = (tid, resultbytes)->begin
             # TODO: avoid String, we don't need base64 encoding here
-            val,refcount = meta_deser(String(resultbytes))
+            val,refcount = meta_deser(resultbytes)
             k = resultpath(obj, tid)
             proclocal[k] = val
             push!(donetasks, tid)
