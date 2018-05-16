@@ -127,6 +127,7 @@ end
 @timetrack function share_task(M::FdbExecutorMeta, id::TaskIdType, allow_dup::Bool)
     annotated_task = M.add_annotation(id)
     new_task(M.taskstore, id, annotated_task; allow_duplicate=allow_dup)
+    yield()  # so that the event thread gets to pick up notifications if any
     nothing
 end
 
@@ -157,6 +158,7 @@ end
         finish_task(M.taskstore, id)
     end
     push!(M.donetasks, id)
+    yield()  # so that the event thread gets to pick up notifications if any
     nothing
 end
 
