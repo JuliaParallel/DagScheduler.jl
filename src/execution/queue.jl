@@ -261,7 +261,7 @@ function reserve_to_share(env::ExecutionCtx)
                 # export all inputs
                 for inp in t.inputs
                     if istask(inp)
-                        export_local_result(env.meta, taskid(inp), inp, UInt64(length(env.dependents[inp])))
+                        export_local_result(env.meta, taskid(inp), inp)
                     end
                 end
             end
@@ -301,22 +301,23 @@ function exec(env::ExecutionCtx, task::TaskIdType)
 
     # export (if other processes need it) or keep in memory (for use in-process) the result
     # TODO: handle vector of chunks specially?
-    if was_stolen(env, task)
-        set_result(env.meta, task, res; refcount=UInt64(length(env.dependents[t])), processlocal=false)
-    else
-        set_result(env.meta, task, res)
-    end
+    set_result(env.meta, task, res; refcount=length(env.dependents[t]), processlocal=!was_stolen(env,task))
 
-    #=
     # clean up task inputs, we don't need them anymore
-    if istask(t)
-        for (inp, ires) in zip(t.inputs, map(x->_collect(env,x,false), inputs(t)))
-            (istask(inp) && isa(ires, Chunk) && !ires.persist) || continue
-            refcount = (length(env.dependents[inp]) > 1) ? decr_result_ref(env.meta, taskid(inp)) : UInt64(0)
-            (refcount == 0) && try pooldelete(ires.handle) end
+    if DagScheduler.RefCounter[] !== DagScheduler.NoRC
+        if istask(t)
+            for (inp, ires) in zip(t.inputs, map(x->_collect(env,x,false), inputs(t)))
+                (istask(inp) && isa(ires, Chunk) && !ires.persist) || continue
+                refcount = (length(env.dependents[inp]) > 1) ? decr_result_ref(env.meta, taskid(inp)) : 0
+                if refcount == 0
+                    try
+                        pooldelete(ires.handle)
+                    end
+                end
+            end
         end
     end
-    =#
+
     env.nexecuted += 1
     true
 end

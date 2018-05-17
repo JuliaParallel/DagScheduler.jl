@@ -59,7 +59,7 @@ function process_trigger(M::SimpleExecutorMeta, k::String, v::Vector{UInt8})
         end
         S.nshared = ncreated - ndeleted
     else
-        val, refcount = meta_deser(v)
+        val = meta_deser(v)
         M.proclocal[k] = val
         id = parse(TaskIdType, basename(k))
         push!(M.donetasks, id)
@@ -151,12 +151,15 @@ end
     ((taskid === NoTask) ? taskid : M.del_annotation(taskid))::TaskIdType
 end
 
-@timetrack function set_result(M::SimpleExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
+@timetrack function set_result(M::SimpleExecutorMeta, id::TaskIdType, val; refcount::Int=0, processlocal::Bool=true)
     k = resultpath(M, id)
     M.proclocal[k] = val
+    if refcount > 1
+        DagScheduler.RefCounter[].refcount(id, refcount)
+    end
     if !processlocal
         val = meta_pack(val)
-        serval = meta_ser((val,refcount))
+        serval = meta_ser(val)
         pid = myid()
         brokercall(broker_set_result, M, k, serval, id, pid)
     end
@@ -170,7 +173,7 @@ end
         val = M.proclocal[k]
     else
         v = brokercall(broker_get_result, M, k)::Vector{UInt8}
-        val, refcount = meta_deser(v)
+        val = meta_deser(v)
         M.proclocal[k] = val
     end
     meta_unpack(val)
@@ -182,10 +185,10 @@ function has_result(M::SimpleExecutorMeta, id::TaskIdType)
 end
 
 function decr_result_ref(M::SimpleExecutorMeta, id::TaskIdType)
-    2
+    DagScheduler.RefCounter[].refcount(id, -1)
 end
 
-function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
+function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
 
@@ -194,7 +197,7 @@ function export_local_result(M::SimpleExecutorMeta, id::TaskIdType, executable, 
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
     val = meta_pack(val)
-    serval = meta_ser((val,refcount))
+    serval = meta_ser(val)
     pid = myid()
     brokercall(broker_set_result, M, k, serval, id, pid)
     nothing

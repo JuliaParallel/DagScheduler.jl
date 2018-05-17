@@ -16,12 +16,17 @@ node1 = NodeEnv(2, getipaddr(), [3,4,5,6])
 runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1]))
 
 @testset "deep dag" begin
+    @everywhere begin
+        DagScheduler.RefCounter[] = DagScheduler.SimpleRC
+    end
+
     info("Testing deep dag...")
     dag1 = gen_straight_dag(ones(Int, 6^4))
     result = collect(rundag(runenv, dag1))
     info("result = ", result)
     @test result == 1
     DagScheduler.print_stats(runenv)
+    @test isempty(DagScheduler.SimpleRC.nz_refcounts())
 
     info("Testing cross connected dag...")
     dag3 = gen_cross_dag()
@@ -29,9 +34,14 @@ runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1]))
     info("result = ", result)
     @test result == 84
     DagScheduler.print_stats(runenv)
+    @test isempty(DagScheduler.SimpleRC.nz_refcounts())
 end
 
 @testset "sorting" begin
+    @everywhere begin
+        DagScheduler.RefCounter[] = DagScheduler.NoRC
+    end
+
     info("Testing sorting...")
 
     for L in (10^6, 10^7)
@@ -59,6 +69,10 @@ end
 end
 
 @testset "meta" begin
+    @everywhere begin
+        DagScheduler.RefCounter[] = DagScheduler.SimpleRC
+    end
+
     info("Testing meta annotation...")
     x = [delayed(rand)(10) for i=1:10]
     y = delayed((c...) -> [c...]; meta=true)(x...)
@@ -67,6 +81,7 @@ end
     @test length(result) == 10
     @everywhere MemPool.cleanup()
     DagScheduler.print_stats(runenv)
+    @test isempty(DagScheduler.SimpleRC.nz_refcounts())
 end
 
 DagScheduler.cleanup(runenv)

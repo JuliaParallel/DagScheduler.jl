@@ -33,8 +33,7 @@ mutable struct FdbExecutorMeta <: ExecutorMeta
             nothing
         end
         result_trigger = (tid, resultbytes)->begin
-            # TODO: avoid String, we don't need base64 encoding here
-            val,refcount = meta_deser(resultbytes)
+            val = meta_deser(resultbytes)
             k = resultpath(obj, tid)
             proclocal[k] = val
             push!(donetasks, tid)
@@ -148,12 +147,15 @@ end
     taskid
 end
 
-@timetrack function set_result(M::FdbExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
+@timetrack function set_result(M::FdbExecutorMeta, id::TaskIdType, val; refcount::Int=0, processlocal::Bool=true)
     k = resultpath(M, id)
     M.proclocal[k] = val
+    if refcount > 1
+        DagScheduler.RefCounter[].refcount(id, refcount)
+    end
     if !processlocal
         val = meta_pack(val)
-        serval = meta_ser((val,refcount))
+        serval = meta_ser(val)
         publish_result(M.resultstore, id, convert(Vector{UInt8}, serval))
         finish_task(M.taskstore, id)
     end
@@ -174,16 +176,16 @@ function has_result(M::FdbExecutorMeta, id::TaskIdType)
 end
 
 function decr_result_ref(M::FdbExecutorMeta, id::TaskIdType)
-    2
+    DagScheduler.RefCounter[].refcount(id, -1)
 end
 
-function export_local_result(M::FdbExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
+function export_local_result(M::FdbExecutorMeta, id::TaskIdType, executable)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
 
     val = repurpose_result_to_export(executable, M.proclocal[k])
     val = meta_pack(val)
-    serval = meta_ser((val,refcount))
+    serval = meta_ser(val)
 
     publish_result(M.resultstore, id, convert(Vector{UInt8}, serval))
     finish_task(M.taskstore, id)

@@ -202,14 +202,17 @@ function steal_task(M::ShmemExecutorMeta, selector=default_task_scheduler)
     task
 end
 
-function set_result(M::ShmemExecutorMeta, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true)
+function set_result(M::ShmemExecutorMeta, id::TaskIdType, val; refcount::Int=0, processlocal::Bool=true)
     k = resultpath(M, id)
     M.proclocal[k] = val
+    if refcount > 1
+        DagScheduler.RefCounter[].refcount(id, refcount)
+    end
 
     if !processlocal
         val = meta_pack(val)
         withlock(M.shmdict.lck) do
-            M.shmdict[k] = (val,refcount)
+            M.shmdict[k] = val
         end
 
         withlock(M.donetasks.lck) do
@@ -232,7 +235,7 @@ function get_result(M::ShmemExecutorMeta, id::TaskIdType)
         sval = withlock(M.shmdict.lck) do
             M.shmdict[k]
         end
-        val, refcount = deserialize(IOBuffer(sval))
+        val = deserialize(IOBuffer(sval))
     end
     meta_unpack(val)
 end
@@ -247,6 +250,7 @@ function has_result(M::ShmemExecutorMeta, id::TaskIdType)
 end
 
 function decr_result_ref(M::ShmemExecutorMeta, id::TaskIdType)
+    #=
     k = resultpath(M, id)
 
     withlock(M.shmdict.lck) do
@@ -260,9 +264,11 @@ function decr_result_ref(M::ShmemExecutorMeta, id::TaskIdType)
         end
         refcount
     end
+    =#
+    DagScheduler.RefCounter[].refcount(id, -1)
 end
 
-function export_local_result(M::ShmemExecutorMeta, id::TaskIdType, executable, refcount::UInt64)
+function export_local_result(M::ShmemExecutorMeta, id::TaskIdType, executable)
     k = resultpath(M, id)
     (k in keys(M.proclocal)) || return
 
@@ -270,7 +276,7 @@ function export_local_result(M::ShmemExecutorMeta, id::TaskIdType, executable, r
     val = meta_pack(val)
 
     withlock(M.shmdict.lck) do
-        M.shmdict[k] = (val,refcount)
+        M.shmdict[k] = val
     end
 
     withlock(M.donetasks.lck) do

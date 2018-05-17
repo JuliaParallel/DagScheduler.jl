@@ -109,11 +109,11 @@ cleanup{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
 detach{T<:ExecutorMeta}(M::T, pid) = error("method not implemented for $T")
 share_task{T<:ExecutorMeta}(M::T, id::TaskIdType, allow_dup::Bool) = error("method not implemented for $T")
 steal_task{T<:ExecutorMeta}(M::T, selector=default_task_selector) = error("method not implemented for $T")
-set_result{T<:ExecutorMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
+set_result{T<:ExecutorMeta}(M::T, id::TaskIdType, val; refcount::Int=0, processlocal::Bool=true) = error("method not implemented for $T")
 get_result{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
 has_result{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
 decr_result_ref{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
-export_local_result{T<:ExecutorMeta}(M::T, id::TaskIdType, executable, refcount::UInt64) = error("method not implemented for $T")
+export_local_result{T<:ExecutorMeta}(M::T, id::TaskIdType, executable) = error("method not implemented for $T")
 
 function get_type(s::String)
     T = Main
