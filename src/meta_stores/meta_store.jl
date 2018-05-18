@@ -208,15 +208,19 @@ const fdb_cluster = Ref{Union{Void,FDBCluster}}(nothing)
 const fdb_db = Ref{Union{Void,FDBDatabase}}(nothing)
 
 function __init__()
-    start_client()
+    try
+        start_client()
 
-    fdb_cluster[] = open(FDBCluster())
-    fdb_db[] = open(FDBDatabase(fdb_cluster[]))
+        fdb_cluster[] = open(FDBCluster())
+        fdb_db[] = open(FDBDatabase(fdb_cluster[]))
 
-    atexit() do
-        close(fdb_db[])
-        close(fdb_cluster[])
-        stop_client()
+        atexit() do
+            close(fdb_db[])
+            close(fdb_cluster[])
+            stop_client()
+        end
+    catch ex
+        info("FdbMeta can not be used. FoundationDB could not be initialized.")
     end
     nothing
 end

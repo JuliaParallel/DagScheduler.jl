@@ -14,10 +14,12 @@ end
 
 node1 = NodeEnv(2, getipaddr(), [3,4,5,6])
 runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1]))
+RC = (DagScheduler.META_IMPL[:cluster] == "DagScheduler.FdbMeta.FdbExecutorMeta") ? DagScheduler.FdbRC : DagScheduler.SimpleRC
 
 @testset "deep dag" begin
     @everywhere begin
-        DagScheduler.RefCounter[] = DagScheduler.SimpleRC
+        RC = (DagScheduler.META_IMPL[:cluster] == "DagScheduler.FdbMeta.FdbExecutorMeta") ? DagScheduler.FdbRC : DagScheduler.SimpleRC
+        DagScheduler.RefCounter[] = RC
     end
 
     info("Testing deep dag...")
@@ -26,7 +28,7 @@ runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1]))
     info("result = ", result)
     @test result == 1
     DagScheduler.print_stats(runenv)
-    @test isempty(DagScheduler.SimpleRC.nz_refcounts())
+    @test isempty(RC.nz_refcounts())
 
     info("Testing cross connected dag...")
     dag3 = gen_cross_dag()
@@ -34,7 +36,7 @@ runenv = DagScheduler.Plugin.setrunenv(RunEnv(; nodes=[node1]))
     info("result = ", result)
     @test result == 84
     DagScheduler.print_stats(runenv)
-    @test isempty(DagScheduler.SimpleRC.nz_refcounts())
+    @test isempty(RC.nz_refcounts())
 end
 
 @testset "sorting" begin
@@ -70,7 +72,8 @@ end
 
 @testset "meta" begin
     @everywhere begin
-        DagScheduler.RefCounter[] = DagScheduler.SimpleRC
+        RC = (DagScheduler.META_IMPL[:cluster] == "DagScheduler.FdbMeta.FdbExecutorMeta") ? DagScheduler.FdbRC : DagScheduler.SimpleRC
+        DagScheduler.RefCounter[] = RC
     end
 
     info("Testing meta annotation...")
@@ -81,7 +84,7 @@ end
     @test length(result) == 10
     @everywhere MemPool.cleanup()
     DagScheduler.print_stats(runenv)
-    @test isempty(DagScheduler.SimpleRC.nz_refcounts())
+    @test isempty(RC.nz_refcounts())
 end
 
 DagScheduler.cleanup(runenv)
