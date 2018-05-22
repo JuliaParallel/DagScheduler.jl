@@ -25,6 +25,8 @@ DagScheduler attempts to do better on the following goals:
 
 [Here are some visualizations](test/viz/README.md) of task graphs illustrating how they are scheduled.
 
+And some [benchmarks](test/benchmarks/README.md)
+
 ## QuickStart
 
 These are a the packages that need to be cloned:
