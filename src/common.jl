@@ -42,6 +42,13 @@ mutable struct RunEnv
     end
 end
 
+function setupfdbrc(refpath::Vector{UInt8})
+    DagScheduler.FdbRC.set_fdb_db()
+    empty!(DagScheduler.FdbRC.RefCountRoot)
+    append!(DagScheduler.FdbRC.RefCountRoot, refpath)
+    nothing
+end
+
 function reset(env::RunEnv, nodes::Vector{Int})
     (hash(nodes) === env.nodehash) || reset(env)
     nothing
@@ -69,6 +76,11 @@ function reset(env::RunEnv, nodes::NodeEnvList=setup_nodes(env.masterid))
         MemPool.enable_who_has_read[] = false
         empty!(MemPool.wrkrips)
         Dagger.use_shared_array[] = false
+    end
+
+    refpath = convert(Vector{UInt8}, joinpath(env.rootpath, "ref"))
+    @sync for w in procs()
+        @async remotecall_wait(setupfdbrc, w, refpath)
     end
 
     nothing

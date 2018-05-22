@@ -29,6 +29,7 @@ const META_IMPL = Dict(
 
 include("common.jl")
 include("bcast_channel.jl")
+include("meta_stores/refcounter.jl")
 include("meta_stores/meta_store.jl")
 include("scheduling/scheduler.jl")
 include("execution/queue.jl")

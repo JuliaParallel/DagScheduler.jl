@@ -109,11 +109,11 @@ cleanup{T<:ExecutorMeta}(M::T) = error("method not implemented for $T")
 detach{T<:ExecutorMeta}(M::T, pid) = error("method not implemented for $T")
 share_task{T<:ExecutorMeta}(M::T, id::TaskIdType, allow_dup::Bool) = error("method not implemented for $T")
 steal_task{T<:ExecutorMeta}(M::T, selector=default_task_selector) = error("method not implemented for $T")
-set_result{T<:ExecutorMeta}(M::T, id::TaskIdType, val; refcount::UInt64=UInt64(1), processlocal::Bool=true) = error("method not implemented for $T")
+set_result{T<:ExecutorMeta}(M::T, id::TaskIdType, val; refcount::Int=0, processlocal::Bool=true) = error("method not implemented for $T")
 get_result{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
 has_result{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
 decr_result_ref{T<:ExecutorMeta}(M::T, id::TaskIdType) = error("method not implemented for $T")
-export_local_result{T<:ExecutorMeta}(M::T, id::TaskIdType, executable, refcount::UInt64) = error("method not implemented for $T")
+export_local_result{T<:ExecutorMeta}(M::T, id::TaskIdType, executable) = error("method not implemented for $T")
 
 function get_type(s::String)
     T = Main
@@ -208,15 +208,19 @@ const fdb_cluster = Ref{Union{Void,FDBCluster}}(nothing)
 const fdb_db = Ref{Union{Void,FDBDatabase}}(nothing)
 
 function __init__()
-    start_client()
+    try
+        start_client()
 
-    fdb_cluster[] = open(FDBCluster())
-    fdb_db[] = open(FDBDatabase(fdb_cluster[]))
+        fdb_cluster[] = open(FDBCluster())
+        fdb_db[] = open(FDBDatabase(fdb_cluster[]))
 
-    atexit() do
-        close(fdb_db[])
-        close(fdb_cluster[])
-        stop_client()
+        atexit() do
+            close(fdb_db[])
+            close(fdb_cluster[])
+            stop_client()
+        end
+    catch ex
+        info("FdbMeta can not be used. FoundationDB could not be initialized.")
     end
     nothing
 end

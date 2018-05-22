@@ -203,8 +203,7 @@ function upstream_result_to_local(env, task, res)
     try
         if !has_result(env.meta, task)
             t = get_executable(env, task)
-            refcount = UInt64(length(env.dependents[t]))
-            set_result(env.meta, task, res; refcount=refcount, processlocal=false)
+            set_result(env.meta, task, res; processlocal=false)
         end
     catch ex
         taskexception(env, ex, catch_backtrace())
@@ -217,8 +216,7 @@ function local_result_to_upstream(upenv, task, res)
     try
         if ((task === taskid(upenv.dag_root)) || was_stolen(upenv, task)) && !has_result(upenv.meta, task)
             t = get_executable(upenv, task)
-            refcount = UInt64(length(upenv.dependents[t]))
-            set_result(upenv.meta, task, res; refcount=refcount, processlocal=false)
+            set_result(upenv.meta, task, res; processlocal=false)
         end
     catch ex
         taskexception(env, ex, catch_backtrace())
