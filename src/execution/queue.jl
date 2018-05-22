@@ -302,6 +302,7 @@ function exec(env::ExecutionCtx, task::TaskIdType)
     # export (if other processes need it) or keep in memory (for use in-process) the result
     # TODO: handle vector of chunks specially?
     set_result(env.meta, task, res; refcount=length(env.dependents[t]), processlocal=!was_stolen(env,task))
+    #info("$task => $(myid()),")
 
     # clean up task inputs, we don't need them anymore
     if DagScheduler.RefCounter[] !== DagScheduler.NoRC

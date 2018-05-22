@@ -23,6 +23,8 @@ DagScheduler attempts to do better on the following goals:
     - external metadata stores provide resilient storage for state and results
     - master detects failures and re-schedules tasks assigned to failed nodes
 
+[Here are some visualizations](test/viz/README.md) of task graphs illustrating how they are scheduled.
+
 ## QuickStart
 
 These are a the packages that need to be cloned:
