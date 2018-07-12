@@ -77,6 +77,7 @@ function refcount(id::TaskIdType, cnt::Int)
         if ref == 0
             clearkey(tran, key)
         end
+        ref
     end
     ref
 end
